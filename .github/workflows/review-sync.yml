@@ -1,0 +1,158 @@
+name: Review Sync (Central)
+run-name: "review-sync · ${{ github.event.client_payload.project_slug || inputs.project_slug }}"
+
+on:
+  repository_dispatch:
+    types: [review-sync]
+  workflow_dispatch:
+    inputs:
+      project_slug:
+        description: "Project slug — identifies the app and names its state folder (state/<project_slug>/)"
+        required: true
+        type: string
+
+concurrency:
+  group: review-sync-${{ github.event.client_payload.project_slug || inputs.project_slug }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync ${{ matrix.provider }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [appstore, playstore]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Run Tests
+        # Runs before secrets are set and without PROJECT_SLUG, so the
+        # legacy-name state tests see a clean environment.
+        run: PYTHONPATH=scripts python -m unittest discover -s tests -v
+      - name: Sync Reviews and Slack Replies
+        # Provider secrets are read directly from this repo's GitHub Actions
+        # secrets. GitHub masks these in logs and never stores them in an event
+        # payload. To go multi-app, replace this env block with the Infisical
+        # import step (see centralised_plan.md).
+        env:
+          PROJECT_SLUG: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
+          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_APP_ID: ${{ secrets.APPSTORE_APP_ID }}
+          GOOGLE_PLAY_PACKAGE_NAME: ${{ secrets.GOOGLE_PLAY_PACKAGE_NAME }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: python scripts/main.py ${{ matrix.provider }}
+      - name: Upload State
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.client_payload.project_slug || inputs.project_slug }}-${{ matrix.provider }}-state
+          path: state/${{ github.event.client_payload.project_slug || inputs.project_slug }}/${{ matrix.provider }}.json
+          if-no-files-found: warn
+
+  commit-state:
+    name: Commit Updated State
+    needs: [sync]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      PROJECT_SLUG: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Download App Store State
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PROJECT_SLUG }}-appstore-state
+          path: state/${{ env.PROJECT_SLUG }}
+        continue-on-error: true
+      - name: Download Google Play State
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.PROJECT_SLUG }}-playstore-state
+          path: state/${{ env.PROJECT_SLUG }}
+        continue-on-error: true
+      - name: Commit Updated State
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          APP_DIR="state/${PROJECT_SLUG}"
+
+          # Detect whether this run produced any state change at all. Add the
+          # whole per-app folder so single-platform apps (only one provider
+          # file present) still stage cleanly.
+          git add "${APP_DIR}" 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No state changes."
+            exit 0
+          fi
+
+          # Reconcile this app's remote JSON into the just-synced local JSON.
+          # merge_state.py merges in JSON space (newest reply timestamp with its
+          # matching hash, reply flags, disabled-thread status). This is why we
+          # do NOT use `git pull --rebase`: rebasing these files would only
+          # produce conflicts a line-based merge cannot resolve.
+          merge_remote_state() {
+            provider="$1"
+            local_file="${APP_DIR}/${provider}.json"
+            remote_file="/tmp/remote_${PROJECT_SLUG}_${provider}.json"
+            [ -f "${local_file}" ] || return 0
+            if git show "origin/${GITHUB_REF_NAME}:${local_file}" > "${remote_file}" 2>/dev/null; then
+              python scripts/merge_state.py "${remote_file}" "${local_file}"
+            fi
+          }
+
+          # Refresh from the latest remote, reconcile, prune, commit, and push on
+          # every attempt. Concurrent runs (this app queued, or other apps) can
+          # advance the branch between our fetch and push, so a rejected push is
+          # retried up to 4 times, each time rebuilding the commit on the newest remote.
+          for attempt in 1 2 3 4; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            merge_remote_state appstore
+            merge_remote_state playstore
+            # Prune AFTER the merge (before add) so the union can't resurrect pruned entries.
+            python scripts/prune_state.py "${APP_DIR}/appstore.json"
+            python scripts/prune_state.py "${APP_DIR}/playstore.json"
+            git reset --mixed "origin/${GITHUB_REF_NAME}"
+            git add "${APP_DIR}" 2>/dev/null || true
+            if git diff --cached --quiet; then
+              echo "Remote already contains the state changes."
+              exit 0
+            fi
+            git commit -m "Update review state (${PROJECT_SLUG})"
+            if git push; then
+              echo "State pushed on attempt ${attempt}/4."
+              exit 0
+            fi
+            echo "Git push rejected; another run advanced the branch. Retry ${attempt}/4."
+          done
+
+          echo "Unable to push state after 4 attempts."
+          exit 1

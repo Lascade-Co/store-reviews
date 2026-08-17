@@ -1,0 +1,13 @@
+{
+    "reviews": {
+        "play-1": {
+            "slack_ts": "123.456",
+            "last_reply_ts": "123.700",
+            "last_sent_reply_hash": "a6c813912c876bb19c327fd5ac6684f1d5de2ed3236fc145a790613b19bd5b33",
+            "replied_at": "2026-08-17T11:35:03.937897+00:00",
+            "google_reply_sent": true
+        }
+    },
+    "state_version": 2,
+    "last_checked": "2026-08-17T11:35:03.937920+00:00"
+}
