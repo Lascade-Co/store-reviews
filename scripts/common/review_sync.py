@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 
 from common.slack_client import (
     SlackApiError,
@@ -20,14 +21,46 @@ def reply_hash(text: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
 
+_SLACK_BRACKET_RE = re.compile(r"<([^<>]*)>")
+
+
+def _unwrap_slack_bracket(match: re.Match) -> str:
+    inner = match.group(1)
+    if "|" in inner:
+        # <https://x|label>, <@U1|alice>, <#C1|general> → keep the label.
+        return inner.split("|", 1)[1]
+    # <@U123>, <#C123>, <!here> → drop the sigil; <https://x> → keep the URL.
+    return inner.lstrip("@#!")
+
+
+def decode_slack_text(text: str) -> str:
+    """Convert Slack message markup into plain text for the store response.
+
+    Slack's `text` HTML-escapes & < > and wraps links, mentions, and commands
+    in angle brackets. Sent verbatim, a developer reply would show literal
+    `&amp;` or `<https://x|x>` publicly, so unwrap brackets first, then
+    unescape entities (&amp; last so it cannot re-introduce markup).
+    """
+    text = _SLACK_BRACKET_RE.sub(_unwrap_slack_bracket, text or "")
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
 def select_new_reviews(
     reviews: list[dict],
     state: dict,
     initial_sync: bool,
     initial_count: int,
     review_id_getter,
+    stop_at_boundary: bool = True,
 ) -> list[dict]:
-    """Select untracked reviews from a newest-first provider response."""
+    """Select untracked reviews from a newest-first provider response.
+
+    ``stop_at_boundary`` must only be True when the provider sorts by an
+    immutable key (Apple's createdDate). Google sorts by lastModified, which
+    edits can bump above a genuinely-new review — breaking at the boundary
+    there would shadow (and permanently drop) that review, so Google scans the
+    whole fetched window and relies on posted_ids for dedup instead.
+    """
     # posted_ids is the permanent dedup source (survives pruning); union it with
     # the active reviews map so nothing already posted is ever re-posted.
     known_ids = set(state.get("posted_ids", [])) | set(state.get("reviews", {}))
@@ -48,10 +81,12 @@ def select_new_reviews(
         review_id = review_id_getter(review)
         if review_id == last_review_id:
             boundary_found = True
-            break
+            if stop_at_boundary:
+                break
+            continue
         if review_id not in known_ids:
             new_reviews.append(review)
-    if not boundary_found:
+    if stop_at_boundary and not boundary_found:
         LOG.warning("last_review_id %s was not present in the fetched review set", last_review_id)
     return new_reviews
 
@@ -67,10 +102,11 @@ def post_new_reviews(
     formatter,
     reply_sent_key: str,
     reply_sent_getter=None,
+    stop_at_boundary: bool = True,
 ) -> None:
     """Post selected reviews oldest-first and persist each Slack mapping."""
     new_reviews = select_new_reviews(
-        reviews, state, initial_sync, initial_count, review_id_getter
+        reviews, state, initial_sync, initial_count, review_id_getter, stop_at_boundary
     )
     if not new_reviews:
         LOG.info("No new %s reviews to send", provider)
@@ -168,7 +204,10 @@ def sync_slack_replies(
 
             message = candidates[-1]
             LOG.info("Found new human Slack reply %s for %s review %s", message["ts"], display_name, review_id)
-            normalized_text = message["text"].strip()
+            normalized_text = decode_slack_text(message["text"]).strip()
+            if not normalized_text:
+                LOG.debug("Newest Slack reply for %s review %s is empty after decoding; skipping", display_name, review_id)
+                continue
             message_hash = reply_hash(normalized_text)
             if entry.get("last_sent_reply_hash") == message_hash:
                 # Advance the timestamp so this already-applied reply is not

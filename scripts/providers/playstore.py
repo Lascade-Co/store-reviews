@@ -136,21 +136,21 @@ def _log_failure(
 
 def fetch_reviews(
     credentials: service_account.Credentials,
-    stop_at_id: str | None = None,
     max_pages: int = PAGE_CAP,
 ) -> list[dict]:
-    """Fetch Google Play reviews, following pagination until the boundary or cap.
+    """Fetch the whole Google Play review window, following pagination to the cap.
 
     Google returns roughly the last 7 days, so paging is naturally bounded; the
-    cap is a safety net. ``stop_at_id`` lets an incremental run stop early once it
-    reaches the last processed review.
+    cap is a safety net. There is deliberately no boundary early-stop: Google
+    sorts by lastModified (mutable), so an edited boundary review can sort above
+    a genuinely-new one — stopping at the boundary would drop that review.
+    Dedup happens later against posted_ids.
     """
     package_name = _package_name()
     endpoint = f"{GOOGLE_PLAY_API}/applications/{package_name}/reviews"
     raw_reviews: list[dict] = []
     page_token = None
     pages = 0
-    stopped_early = False
 
     while pages < max_pages:
         params = {"maxResults": MAX_RESULTS}
@@ -184,18 +184,12 @@ def fetch_reviews(
         raw_reviews.extend(page)
         pages += 1
 
-        if stop_at_id is not None and any(
-            isinstance(review, dict) and review.get("reviewId") == stop_at_id for review in page
-        ):
-            stopped_early = True
-            break
-
         pagination = data.get("tokenPagination")
         page_token = pagination.get("nextPageToken") if isinstance(pagination, dict) else None
         if not page_token:
             break
 
-    if page_token and not stopped_early:
+    if page_token:
         LOG.warning(
             "Google Play review pagination stopped at page cap %d; older reviews were not fetched this run",
             max_pages,
@@ -316,10 +310,20 @@ def reply_to_review(credentials: service_account.Credentials, review_id: str, te
     except ValueError as exc:
         _log_failure(review_id, endpoint, "response was not valid JSON", response.status_code, "not_retried_for_write_safety")
         raise RuntimeError(f"Google Play reply response for {review_id} was not valid JSON") from exc
+    # Google may normalize the applied reply (HTML-ish content stripped,
+    # "approximately 350" chars), so result.replyText need not equal what was
+    # sent. The reply was published either way — only a missing result/replyText
+    # means failure; a mismatch is logged, never raised.
     result = data.get("result") if isinstance(data, dict) else None
-    if not isinstance(result, dict) or result.get("replyText") != text:
-        _log_failure(review_id, endpoint, "response did not contain the accepted reply text", response.status_code, "not_applicable")
+    applied_text = result.get("replyText") if isinstance(result, dict) else None
+    if not isinstance(applied_text, str) or not applied_text.strip():
+        _log_failure(review_id, endpoint, "response did not contain an applied reply text", response.status_code, "not_applicable")
         raise RuntimeError(f"Google Play reply response for {review_id} was invalid")
+    if applied_text != text:
+        LOG.warning(
+            "provider=Google Play review_id=%s reply_normalized=true: applied reply text differs from the sent text",
+            review_id,
+        )
 
 
 REQUIRED_PLAYSTORE_ENV = (
@@ -345,7 +349,9 @@ def run_playstore() -> None:
     if initial_sync:
         reviews = fetch_reviews(credentials, max_pages=1)
     else:
-        reviews = fetch_reviews(credentials, stop_at_id=state.get("last_review_id"))
+        # Fetch the full (7-day-bounded) window; no boundary early-stop because
+        # Google's lastModified order is mutable (see fetch_reviews).
+        reviews = fetch_reviews(credentials)
     LOG.info("Fetched %d Google Play review(s)", len(reviews))
     for review in reviews:
         review_id = _review_id(review)
@@ -371,6 +377,7 @@ def run_playstore() -> None:
             format_review,
             "google_reply_sent",
             _has_developer_reply,
+            stop_at_boundary=False,
         )
     if existing_reply_state_changed:
         save_if_changed("playstore", original_state, state)

@@ -110,7 +110,9 @@ app works by simply not setting that platform's secrets.
 ```
 
 Tunable constants:
-- `OPEN_POLL_WINDOW_DAYS = 30` — keep polling an **un-replied** review this long, then stop.
+- `OPEN_POLL_WINDOW_DAYS = 7` — keep polling an **un-replied** review this long, then stop.
+  Tradeoff: a developer reply typed more than 7 days after the review was posted is not sent to
+  the store (`posted_ids` still prevents any re-post of the review itself).
 - `REPLY_EDIT_WINDOW_DAYS = 2` — after a reply is sent, keep polling this long (to allow the
   developer to edit/replace it), then stop.
 
@@ -145,16 +147,18 @@ boundary always survives.
 
 ### 5.4 Provider-neutral logic — `scripts/common/review_sync.py`
 - `reply_hash(text)` — sha256 of the normalized reply.
-- `select_new_reviews(...)` — **dedup against `posted_ids`** (not the prunable `reviews` map). Initial run posts newest 5; incremental walks newest→oldest stopping at `last_review_id`, collecting anything not in `posted_ids`.
-- `post_new_reviews(...)` — posts new reviews oldest→newest; per post: `slack.post_review`, add id to `posted_ids`, add a `reviews` entry with `posted_at = now`, save. Then advance `last_review_id`.
+- `decode_slack_text(text)` — converts Slack message markup to plain text before a reply is sent to a store: unwraps angle-bracket segments (`<https://x|label>` → `label`, `<https://x>` → URL, `<@U…>`/`<#C…|name>`/`<!here>` → label/bare name), then unescapes `&lt;` → `<`, `&gt;` → `>`, `&amp;` → `&` (ampersand **last** so it can't re-introduce markup). Without this, "Thanks & sorry" would be published as "Thanks &amp;amp; sorry".
+- `select_new_reviews(..., stop_at_boundary)` — **dedup against `posted_ids`** (not the prunable `reviews` map). Initial run posts newest 5. Incremental walks newest→oldest: with `stop_at_boundary=True` (Apple — immutable `createdDate` order) it stops at `last_review_id`; with `False` (Google — mutable `lastModified` order, an edited boundary can sort above a new review and shadow it) it scans the whole fetched list and selects everything not in `posted_ids`.
+- `post_new_reviews(...)` — posts new reviews oldest→newest; per post: `slack.post_review`, add id to `posted_ids`, add a `reviews` entry with `posted_at = now`, save. Then advance `last_review_id`. Passes `stop_at_boundary` through to selection.
 - `reply_candidates(...)` — unique, newer-than-`last_reply_ts`, human, non-empty messages, sorted.
-- `sync_slack_replies(...)` — for each **active** thread, take the newest human reply; if its hash equals `last_sent_reply_hash`, skip the store call and advance `last_reply_ts`; else send to the store, then set `last_reply_ts`, `last_sent_reply_hash`, `replied_at = now`, and the reply flag. Failures leave state unchanged (retried next run). Optionally skip polling entries already inactive by the window rule.
+- `sync_slack_replies(...)` — for each **active** thread, take the newest human reply and decode it with `decode_slack_text` (skip if empty after decoding); if its hash equals `last_sent_reply_hash`, skip the store call and advance `last_reply_ts`; else send the decoded text to the store, then set `last_reply_ts`, `last_sent_reply_hash` (hash of the decoded text), `replied_at = now`, and the reply flag. Failures leave state unchanged (retried next run). Optionally skip polling entries already inactive by the window rule.
 
 ### 5.5 Providers — `appstore.py`, `playstore.py`
 - **Guards:** `run_appstore`/`run_playstore` log "not configured" and return when their platform's env vars are absent.
 - **Pagination in `fetch_reviews`:**
   - Apple — follow the JSON:API `data["links"]["next"]` URL in a loop; stop on no `next`, when `last_review_id` appears (createdDate order is stable → safe early stop), or at a page cap (e.g. 25).
-  - Google — loop passing `token=<nextPageToken>` until `tokenPagination.nextPageToken` is absent, a page yields no id outside `posted_ids`, or the page cap. `LOG.warning` if the cap is hit (no silent truncation).
+  - Google — loop passing `token=<nextPageToken>` until `tokenPagination.nextPageToken` is absent or the page cap. **No boundary early-stop**: `lastModified` order is mutable, so stopping at a known id could hide a genuinely-new review sorted below an edited one; the window is already ~7 days so the full fetch is bounded. `LOG.warning` if the cap is hit (no silent truncation).
+- **Google reply validation** — success = response contains a non-empty `result.replyText`. Google may normalize the applied text (HTML-ish content stripped, "approximately 350" chars), so the applied text is **not** required to equal the sent text; a difference is logged as a normalization warning. Only a missing/empty `result.replyText` raises.
 - Formatting, escaping, validation, reply-to-store (writes with retries disabled), Google 350-char truncation — as in the existing providers.
 
 ### 5.6 Merge — `scripts/merge_state.py`
@@ -166,7 +170,7 @@ flags, picks the most-recent `last_review_id`/`last_checked`, and **unions `post
 ### 5.7 Prune — `scripts/prune_state.py` (new)
 ```python
 # usage: prune_state.py STATE_FILE   (no-op if the file doesn't exist)
-OPEN_POLL_WINDOW_DAYS = 30
+OPEN_POLL_WINDOW_DAYS = 7
 REPLY_EDIT_WINDOW_DAYS = 2
 
 def prune_inactive(state: dict, now: datetime) -> dict:
@@ -367,12 +371,15 @@ jobs:
 | JSON state can't be git-rebased/merged | JSON-space merge (`merge_state.py`) + `git reset --mixed` |
 | Single-platform app never persists state | `git add "state/<project_slug>/"` folder, not `git add a b` |
 | iOS-only / Android-only app | provider-presence guards skip the absent platform |
-| Late reply after days | supported up to `OPEN_POLL_WINDOW_DAYS` (tunable) |
+| Late reply after days | supported up to `OPEN_POLL_WINDOW_DAYS` = 7 (tunable) |
+| Slack-encoded reply text (`&amp;`, `<url\|label>`) published verbatim | `decode_slack_text` unwraps brackets + unescapes entities before hashing/sending (§5.4) |
+| Google normalizes the applied reply → strict echo check fails a published reply | lenient validation: non-empty `result.replyText` = success; mismatch logged, not raised (§5.5) |
+| Edited Google boundary review shadows a newer review (silent loss) | Google fetches/scans the whole 7-day window with no boundary stop; dedup via `posted_ids` — Apple keeps its immutable-`createdDate` boundary stop (§5.4, §5.5) |
 
 ---
 
 ## 9. Verification
-1. **Unit tests** (no `PROJECT_SLUG`): existing suite green; add tests for `select_new_reviews` deduping via `posted_ids`, `prune_inactive` (keeps open<30d, replied<2d, drops the rest, preserves ids), pagination (multi-page fetch + stop-at-boundary), and `merge_states` unioning `posted_ids`.
+1. **Unit tests** (no `PROJECT_SLUG`): existing suite green; add tests for `select_new_reviews` deduping via `posted_ids`, `prune_inactive` (keeps open<7d, replied<2d, drops the rest, preserves ids), pagination (multi-page fetch; Apple stop-at-boundary, Google full-window with no early-stop), `decode_slack_text` (entities, labelled/bare links, mentions, `&amp;` last), Google normalized-reply acceptance (missing `result.replyText` still raises), no-shadow selection below an edited Google boundary, and `merge_states` unioning `posted_ids`.
 2. **Prune-after-merge converges**: remote has an old inactive R1 + R2; run merge → prune → commit; assert R1 is gone and stays gone on a second cycle.
 3. **Re-post safety**: after pruning R1, feed a fetch that re-includes R1 (edited/bumped) and assert it is NOT re-posted (it's in `posted_ids`).
 4. **Concurrent push**: two runs racing; the rejected one retries and both apps'/providers' state survive.

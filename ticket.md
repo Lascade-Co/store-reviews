@@ -29,6 +29,7 @@ The current platform supports:
 - Bounded reply polling with dynamic state pruning (keeps per-run Slack calls small)
 - Slack thread creation and polling
 - Human-reply detection
+- Slack markup decoding for store replies (entities unescaped; links, mentions, and commands unwrapped)
 - Apple developer responses
 - Google Play developer replies
 - Per-application state folders (one JSON file per provider)
@@ -213,7 +214,7 @@ The Google Play job:
 5. Reads secrets from the central repo's GitHub Actions secrets.
 6. Skips immediately when the Google Play secrets are not present for this application.
 7. Generates an OAuth access token using the official Google authentication library.
-8. Fetches Google Play reviews (paginated: follows `nextPageToken` to the boundary or a page cap).
+8. Fetches Google Play reviews (paginated: follows `nextPageToken` across the whole ~7-day window or a page cap; there is deliberately no boundary early-stop, because Google's `lastModified` ordering is mutable).
 9. Performs initial or incremental synchronization.
 10. Polls Slack threads when appropriate.
 11. Sends Slack replies to Google Play.
@@ -408,6 +409,8 @@ When `review-105` is reached, it is treated as the previous synchronization boun
 
 The system then removes any IDs already present in the `reviews` mapping and posts only genuinely new reviews.
 
+The boundary stop applies to the App Store, whose `createdDate` ordering is immutable. Google Play orders reviews by `lastModified`, which an edit changes — an edited boundary review could sort above a genuinely new review and permanently shadow it. The Google Play provider therefore never stops at the boundary: it fetches and scans the entire window (which the upstream API already bounds to about 7 days) and relies solely on the permanent `posted_ids` dedup to select new reviews.
+
 New reviews are posted oldest-to-newest so Slack displays them in chronological order.
 
 ## 11. Slack Review Message Flow
@@ -480,10 +483,11 @@ The shared selection logic is:
 2. Ignore the bot parent, bots, workflow/system messages, empty messages, duplicate timestamps, and messages at or before `last_reply_ts`.
 3. Sort remaining human messages by Slack `ts`.
 4. Select the newest message.
-5. Normalize the text and calculate a SHA-256 `last_sent_reply_hash`.
-6. If that hash equals the stored hash, do not call Apple or Google. Advance `last_reply_ts` so the identical new Slack message is not reconsidered.
-7. If the hash differs, call the provider update endpoint.
-8. Update state only after the provider accepts the response.
+5. Decode Slack markup into plain text: unwrap angle-bracket segments (`<https://x|label>` → `label`, `<https://x>` → the URL, `<@U…>`/`<#C…>`/`<!here>` → the label or bare name), then unescape the HTML entities `&lt;`, `&gt;`, and `&amp;` (ampersand last). Without this, a reply typed as "Thanks & sorry" would be published on the store as "Thanks &amp;amp; sorry". A reply that is empty after decoding is skipped.
+6. Normalize the decoded text and calculate a SHA-256 `last_sent_reply_hash`.
+7. If that hash equals the stored hash, do not call Apple or Google. Advance `last_reply_ts` so the identical new Slack message is not reconsidered.
+8. If the hash differs, call the provider update endpoint.
+9. Update state only after the provider accepts the response.
 
 If Apple or Google fails, no reply timestamp or hash is stored for that failed message. The same newest reply remains eligible for the next workflow run.
 
@@ -529,7 +533,7 @@ with:
 }
 ```
 
-6. The API response is validated.
+6. The API response is validated leniently: the reply succeeded when the response carries a non-empty `result.replyText`. Google may normalize the applied text (HTML-like content is stripped, and the limit is "approximately 350" characters), so the applied text is not required to equal the sent text — a difference is logged as a normalization warning, never raised as a failure. Only a missing or empty `result.replyText` is an error.
 7. Google creates the first reply or updates its existing developer reply.
 8. `last_reply_ts` and `last_sent_reply_hash` are updated.
 9. `google_reply_sent` is set to `true` as a successful-send status.
@@ -710,7 +714,7 @@ Secrets are fixed-name GitHub Actions secrets on the central repository, so it c
 `posted_ids` is never pruned (it is the permanent dedup set), so it grows by one id per review over the app's lifetime. The active `reviews` map is bounded by pruning, but the state file and Git history grow slowly with `posted_ids`. This is negligible for normal volumes (thousands of ids ≈ a few hundred KB).
 
 ### 21.4 Pruning windows drop very-late replies
-To bound Slack polling, threads are pruned from the active set after `OPEN_POLL_WINDOW_DAYS` (default 30) for un-replied reviews, and after `REPLY_EDIT_WINDOW_DAYS` (default 2) once a reply is sent. A developer reply typed after that window is not detected. Tune the windows per review cadence.
+To bound Slack polling, threads are pruned from the active set after `OPEN_POLL_WINDOW_DAYS` (default 7) for un-replied reviews, and after `REPLY_EDIT_WINDOW_DAYS` (default 2) once a reply is sent. The tradeoff: an un-replied review's Slack thread is polled for at most 7 days — a developer reply typed after that is not sent to the store (`posted_ids` still prevents any re-post of the review). A replied thread is polled for 2 more days to allow the developer to edit or replace the response. Tune the windows per review cadence.
 
 ### 21.5 Slack rate limits and retention
 Reply polling calls `conversations.replies` once per active thread per run; the count scales with the active set (bounded by pruning) and shares the internal bot's ~50 requests/minute budget (per app, per workspace). On a free Slack workspace, messages older than ~90 days are hidden, so a reply to a very old review can be unreadable. `chat.postMessage` write retries are disabled (to avoid duplicate posts), so a rare rate-limit burst while posting fails the run; the next run resumes and re-posts nothing already posted (protected by `posted_ids`).
@@ -741,6 +745,12 @@ The test suite covers:
 - Review ID mapping.
 - Duplicate reply protection.
 - Newest human reply selection.
+- Slack markup decoding (entities, links, mentions) before hashing and sending.
+- Replies that decode to empty text being skipped.
+- Google normalized reply text being accepted (missing `result.replyText` still failing).
+- Google full-window selection not shadowing a review below an edited boundary.
+- Apple boundary stop preserved.
+- Pruning windows (7-day open, 2-day edit).
 - Identical reply skipping using the response hash.
 - Bot and Slack system-message filtering.
 - Failed provider updates leaving reply state unchanged.

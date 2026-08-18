@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from prune_state import prune_inactive
+from prune_state import OPEN_POLL_WINDOW_DAYS, REPLY_EDIT_WINDOW_DAYS, prune_inactive
 
 
 NOW = datetime(2026, 8, 14, 12, 0, 0, tzinfo=timezone.utc)
@@ -17,11 +17,16 @@ def prune(reviews: dict, posted_ids=None) -> dict:
 
 
 class PruneStateTests(unittest.TestCase):
+    def test_windows_are_seven_and_two_days(self):
+        self.assertEqual(OPEN_POLL_WINDOW_DAYS, 7)
+        self.assertEqual(REPLY_EDIT_WINDOW_DAYS, 2)
+
     def test_open_review_kept_while_recent_dropped_when_old(self):
+        # The un-replied window is 7 days: a 10-day-old open review is dropped.
         state = prune(
             {
                 "recent": {"posted_at": days_ago(5)},
-                "old": {"posted_at": days_ago(40)},
+                "old": {"posted_at": days_ago(10)},
             }
         )
         self.assertIn("recent", state["reviews"])

@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-OPEN_POLL_WINDOW_DAYS = 30
+OPEN_POLL_WINDOW_DAYS = 7
 REPLY_EDIT_WINDOW_DAYS = 2
 
 

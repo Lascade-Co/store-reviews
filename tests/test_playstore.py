@@ -107,6 +107,47 @@ class PlayStoreTests(unittest.TestCase):
 
     @patch("providers.playstore._package_name", return_value="com.example.app")
     @patch("providers.playstore.request_with_retries")
+    def test_fetch_reviews_does_not_stop_at_a_known_review(self, request, package_name):
+        # Google's lastModified order is mutable: an edited boundary review can
+        # sort above a genuinely-new one, so fetch must read the whole window.
+        page1 = Mock(ok=True, status_code=200, text="")
+        page1.json.return_value = {
+            "reviews": [review("boundary")],
+            "tokenPagination": {"nextPageToken": "T2"},
+        }
+        page2 = Mock(ok=True, status_code=200, text="")
+        page2.json.return_value = {"reviews": [review("new")]}
+        request.side_effect = [page1, page2]
+
+        result = fetch_reviews(Mock(token="access-token"))
+
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual({item["reviewId"] for item in result}, {"boundary", "new"})
+
+    @patch("providers.playstore._package_name", return_value="com.example.app")
+    @patch("providers.playstore.request_with_retries")
+    def test_normalized_reply_text_is_accepted(self, request, package_name):
+        # Google may strip HTML-ish content or trim the applied reply; the reply
+        # was still published, so a differing replyText must not raise.
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {"result": {"replyText": "normalized text"}}
+        request.return_value = response
+
+        reply_to_review(Mock(token="access-token"), "play-1", "original <b>text</b>")
+
+    @patch("providers.playstore._package_name", return_value="com.example.app")
+    @patch("providers.playstore.request_with_retries")
+    def test_missing_reply_result_still_raises(self, request, package_name):
+        for body in ({}, {"result": {}}, {"result": {"replyText": "  "}}):
+            response = Mock(ok=True, status_code=200)
+            response.json.return_value = body
+            request.return_value = response
+
+            with self.assertRaises(RuntimeError):
+                reply_to_review(Mock(token="access-token"), "play-1", "Thanks")
+
+    @patch("providers.playstore._package_name", return_value="com.example.app")
+    @patch("providers.playstore.request_with_retries")
     def test_reply_uses_official_endpoint_and_payload(self, request, package_name):
         response = Mock()
         response.json.return_value = {"result": {"replyText": "Thanks"}}
