@@ -9,9 +9,9 @@ This project synchronizes customer reviews from:
 
 Reviews are posted to Slack. A developer can reply inside the Slack thread, and the bot sends that reply back to the corresponding store.
 
-The platform is centralized and multi-application. A small trigger workflow in each application's own repository fires on a schedule and sends a `repository_dispatch` event (carrying the application's `project_slug`) to this central repository. The central workflow reads the application's credentials from the central repository's GitHub Actions secrets and runs the synchronization. Each application has its own Slack channel and its own state folder named by its `project_slug`.
+The platform is centralized and multi-application. A small trigger workflow in each application's own repository fires on a schedule and sends a `repository_dispatch` event (carrying the application's `project_slug` — its **Infisical project slug**) to this central repository. The central workflow fetches the application's credentials from the **`/reviews` folder of that Infisical project** (via `Infisical/secrets-action`) and runs the synchronization. Each application has its own Slack channel and its own state folder named by its `project_slug`.
 
-> Secrets are currently GitHub Actions secrets on the central repository, which serves one app at a time. Moving to per-application secrets in Infisical (a `/reviews` folder per project) is a planned enhancement; only the secret-loading step changes, not the logic.
+> The Infisical machine-identity credentials (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_DOMAIN`) and the trigger token (`CENTRAL_DISPATCH_TOKEN`) are Lascade-Co **organization** GitHub secrets, auto-provisioned to every repository in the org — the same pattern used by `Lascade-Co/actions` (flutter build/release) and `Lascade-Co/connector`. No per-application GitHub secrets exist anywhere.
 
 The system uses Slack Web API methods only.
 
@@ -49,7 +49,7 @@ App repository (one per application)
 Central repository: Review Sync workflow
                     │
                     ▼
-       Read secrets from the central repo's GitHub Actions secrets
+   Fetch the app's secrets from Infisical (project <project_slug>, folder /reviews)
                     │
                     ▼
         ┌──────────────────────────┐
@@ -89,7 +89,7 @@ Central repository: Review Sync workflow
                 Push state to Git
 ```
 
-The payload carries only the non-secret `project_slug`. Credentials are read from the central repository's GitHub Actions secrets inside the central workflow. Each application has its own state folder (named by `project_slug`); the App Store and Google Play jobs use separate state files inside that folder and post to the same per-application Slack channel.
+The payload carries only the non-secret `project_slug` (the Infisical project slug). Credentials are fetched from that Infisical project's `/reviews` folder inside the central workflow. Each application has its own state folder (named by the same `project_slug`); the App Store and Google Play jobs use separate state files inside that folder and post to the same per-application Slack channel.
 
 ## 3. Repository Structure
 
@@ -176,15 +176,13 @@ client-payload: >-
   { "project_slug": "airlines70" }
 ```
 
-The application repository needs one secret, `CENTRAL_DISPATCH_TOKEN`, authorized to dispatch to the central repository. The payload carries only the non-secret `project_slug` and no application credentials.
+The application repository uses the `CENTRAL_DISPATCH_TOKEN` Lascade-Co organization secret (auto-provisioned to org repositories), authorized to dispatch to the central repository. The payload carries only the non-secret `project_slug` and no application credentials.
 
 ## 5. Workflow Jobs
 
 ### 5.1 Secret Load
 
-The provider secrets are read directly from the central repository's GitHub Actions secrets and exported as environment variables (`APPSTORE_*`, `GOOGLE_PLAY_*`, `SLACK_CHANNEL_ID`, `SLACK_BOT_TOKEN`) on the sync step. GitHub masks these in logs and never stores them in an event payload. `PROJECT_SLUG` (from the payload) is also set, and names the state folder.
-
-(When the platform moves to Infisical, this step is replaced by the `Infisical/secrets-action` reading a `/reviews` folder keyed by `project_slug`; nothing else changes.)
+The provider secrets are fetched with `Infisical/secrets-action@v1.0.15` (`method: universal`) from the application's Infisical project — `project-slug` comes from the dispatch payload, `env-slug: prod`, `secret-path: /reviews` — and exported as masked environment variables (`APPSTORE_*`, `GOOGLE_PLAY_*`, `SLACK_CHANNEL_ID`, `SLACK_BOT_TOKEN`) for the following steps (`export-type: env`). The Infisical machine-identity credentials (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_DOMAIN`) are Lascade-Co organization GitHub secrets. `PROJECT_SLUG` (from the payload) is also set on the sync step, and names the state folder.
 
 ### 5.2 App Store Reviews Job
 
@@ -194,7 +192,7 @@ The App Store job:
 2. Installs Python 3.12.
 3. Installs dependencies.
 4. Runs the test suite.
-5. Reads secrets from the central repo's GitHub Actions secrets.
+5. Fetches the application's secrets from the Infisical project's `/reviews` folder.
 6. Skips immediately when the App Store secrets are not present for this application.
 7. Generates an App Store Connect JWT.
 8. Fetches App Store reviews (paginated: follows the `next` link to the boundary or a page cap).
@@ -211,7 +209,7 @@ The Google Play job:
 2. Installs Python 3.12.
 3. Installs dependencies.
 4. Runs the test suite.
-5. Reads secrets from the central repo's GitHub Actions secrets.
+5. Fetches the application's secrets from the Infisical project's `/reviews` folder.
 6. Skips immediately when the Google Play secrets are not present for this application.
 7. Generates an OAuth access token using the official Google authentication library.
 8. Fetches Google Play reviews (paginated: follows `nextPageToken` across the whole ~7-day window or a page cap; there is deliberately no boundary early-stop, because Google's `lastModified` ordering is mutable).
@@ -250,7 +248,7 @@ The provider jobs use read-only repository permissions.
 
 The App Store provider uses an App Store Connect API key.
 
-The following keys are read from the central repository's GitHub Actions secrets and injected as environment variables on the sync step:
+The following keys are read from the application's Infisical `/reviews` folder and injected as environment variables:
 
 ```text
 APPSTORE_API_KEY_ID
@@ -271,7 +269,7 @@ The token is reused during the provider execution rather than regenerated for ev
 
 ## 7. Google Play Authentication
 
-Google Play uses a complete service-account JSON document, read from the central repository's GitHub Actions secrets:
+Google Play uses a complete service-account JSON document, read from the application's Infisical `/reviews` folder:
 
 ```text
 GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
@@ -295,13 +293,15 @@ The library obtains and refreshes the OAuth access token. The project does not m
 
 ## 8. Slack Authentication and Configuration
 
-Slack uses one shared bot token, stored as a secret on the central repository and set as an environment variable for the sync step:
+Slack uses one shared bot token, stored (like every other per-application key) in each application's Infisical `/reviews` folder and set as an environment variable for the sync step:
 
 ```text
 SLACK_BOT_TOKEN
 ```
 
-Each application posts to its own Slack channel. The channel is configured as a secret on the central repository:
+The token value is the same shared internal bot in every project's folder; keeping it in `/reviews` means the workflow reads all eight keys from one place.
+
+Each application posts to its own Slack channel. The channel is configured in the same `/reviews` folder:
 
 ```text
 SLACK_CHANNEL_ID
@@ -707,8 +707,8 @@ The Google Play Developer "Reply to Reviews" API returns only:
 
 So an empty Google Play result is normal when no qualifying review appeared in the last week. Reviews older than 7 days are visible only in the Play Console UI, not the API — there is no parameter to widen the window. (Apple's API has no such window.)
 
-### 21.2 Single app via central-repo secrets
-Secrets are fixed-name GitHub Actions secrets on the central repository, so it currently serves one application. Multiple applications require per-application secrets (namespaced GitHub secrets or Infisical `/reviews` per project). The architecture is already multi-app; only secret provisioning changes.
+### 21.2 Per-application secrets via Infisical (resolved)
+Secrets were previously fixed-name GitHub Actions secrets on the central repository, which limited the platform to one application. Secrets are now fetched per application from Infisical (`/reviews` folder of the project named by the payload's `project_slug`), so the platform serves any number of applications; onboarding an app is purely Infisical + trigger configuration (Section 23).
 
 ### 21.3 State growth from `posted_ids`
 `posted_ids` is never pruned (it is the permanent dedup set), so it grows by one id per review over the app's lifetime. The active `reviews` map is bounded by pruning, but the state file and Git history grow slowly with `posted_ids`. This is negligible for normal volumes (thousands of ids ≈ a few hundred KB).
@@ -774,9 +774,9 @@ python3 -m compileall -q scripts tests
 
 ## 23. Manual Setup
 
-### 23.1 Central repository secrets
+### 23.1 Infisical per-application secrets
 
-Add these as GitHub Actions secrets on the central repository. Include only the platforms the app ships (an Android-only app omits the `APPSTORE_*` keys; an iOS-only app omits the `GOOGLE_PLAY_*` keys):
+In the application's Infisical project, create a `/reviews` folder (prod environment) holding the review-bot keys. Include only the platforms the app ships (an Android-only app omits the `APPSTORE_*` keys; an iOS-only app omits the `GOOGLE_PLAY_*` keys — the absent platform's job self-skips):
 
 ```text
 APPSTORE_API_KEY_ID               (App Store)
@@ -785,20 +785,20 @@ APPSTORE_ISSUER_ID                (App Store)
 APPSTORE_APP_ID                   (App Store; numeric Apple app ID)
 GOOGLE_PLAY_PACKAGE_NAME          (Google Play)
 GOOGLE_PLAY_SERVICE_ACCOUNT_JSON  (Google Play; raw JSON, not base64)
-SLACK_CHANNEL_ID                  (both)
-SLACK_BOT_TOKEN                   (shared internal bot; xoxb-...)
+SLACK_CHANNEL_ID                  (both; the app's Slack channel)
+SLACK_BOT_TOKEN                   (both; the shared internal bot, xoxb-...)
 ```
 
 The App Store Connect API key must have permission to read customer reviews and manage responses. The Google Play Developer API must be enabled, and the service account must have Play Console access to view and reply to reviews.
 
-Because secret names are fixed, the central repository serves one application. Multiple applications require namespaced secrets or a move to Infisical (Section 25).
+No GitHub secrets are configured manually: `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_DOMAIN`, and `CENTRAL_DISPATCH_TOKEN` are Lascade-Co organization secrets, auto-provisioned to every repository in the org.
 
 ### 23.2 Application repository
 
-In each application's repository:
+In each application's repository (inside the Lascade-Co org, so `CENTRAL_DISPATCH_TOKEN` is already present):
 
-1. Add the secret `CENTRAL_DISPATCH_TOKEN` — a PAT or GitHub App token authorized to POST `repository_dispatch` to the central repository. (The default `GITHUB_TOKEN` cannot trigger a workflow via dispatch.)
-2. Copy `triggers/review-sync-trigger.yml` into `.github/workflows/` on the repository's default branch, and set `project_slug` in the payload.
+1. Copy `triggers/review-sync-trigger.yml` into `.github/workflows/` on the repository's default branch.
+2. Set `project_slug` in the payload to the application's **Infisical project slug**. The same slug names the application's state folder in the central repository.
 
 ### 23.3 Slack
 
@@ -894,15 +894,15 @@ The Slack app is the visible sender inside Slack. The store response is publishe
 
 ## 25. Multi-Application Design
 
-The architecture is multi-application: per-application triggers, a `project_slug` in the payload, per-application `state/<project_slug>/` folders, and app-neutral logic (pagination, dedup, pruning, provider guards). The same provider code serves every application, and which provider runs is derived automatically from which secrets are present (iOS-only, Android-only, or both).
+The architecture is multi-application: per-application triggers, a `project_slug` in the payload, per-application `state/<project_slug>/` folders, and app-neutral logic (pagination, dedup, pruning, provider guards). The same provider code serves every application, and which provider runs is derived automatically from which secrets are present in the app's `/reviews` folder (iOS-only, Android-only, or both).
 
-The one thing that currently limits it to a single application is **secret provisioning**: secrets are fixed-name GitHub Actions secrets on the central repository. To serve many applications, move per-application secrets into **Infisical** — a `/reviews` folder per app project — and replace the central workflow's secret-load step with the `Infisical/secrets-action`, keyed by the payload's `project_slug`. Provision the Infisical machine-identity credentials (`INFISICAL_CLIENT_ID/SECRET/DOMAIN`) and `CENTRAL_DISPATCH_TOKEN` as GitHub **organization** secrets so every consumer repo inherits them. Nothing in the state schema, pagination, dedup, or pruning changes.
+Secret provisioning is per-application via **Infisical**: the central workflow's secret-load step is the `Infisical/secrets-action`, keyed by the payload's `project_slug` (the Infisical project slug), reading the `/reviews` folder of the prod environment. The Infisical machine-identity credentials (`INFISICAL_CLIENT_ID/SECRET/DOMAIN`) and `CENTRAL_DISPATCH_TOKEN` are GitHub **organization** secrets, so every consumer repo inherits them — the same pattern as the `Lascade-Co/actions` central build workflows (which read `/Build` and `/App-Env` the same way).
 
-### Adding an application (once multi-app secrets are in place)
+### Adding an application
 
 1. Create the application's Slack channel and invite the shared bot.
-2. Provide the application's secrets (via Infisical `/reviews`, or namespaced central-repo secrets).
-3. Add `CENTRAL_DISPATCH_TOKEN` and the trigger workflow (with the app's `project_slug`) to the application's repository.
+2. Create the `/reviews` folder in the application's Infisical project with the keys from Section 23.1.
+3. Add the trigger workflow (with the app's Infisical `project_slug`) to the application's repository.
 
 The first run performs an initial synchronization and creates the application's state folder; no manual state creation is needed.
 
@@ -919,7 +919,7 @@ Per-application repository_dispatch triggers   (in place)
 Provider matrix per run   (in place)
         │
         ▼
-Infisical (or namespaced) per-application secrets   (next step for multi-app)
+Infisical per-application secrets   (in place)
         │
         ▼
 Database-backed state
@@ -928,4 +928,4 @@ Database-backed state
 Queue and worker service
 ```
 
-Per-application secrets (Infisical) is the next step to serve more than one app. Database-backed state and a queue-and-worker service become preferable when GitHub Actions startup time, Slack rate limits, state commits, or the number of scheduled application triggers become operational constraints.
+Database-backed state and a queue-and-worker service become preferable when GitHub Actions startup time, Slack rate limits, state commits, or the number of scheduled application triggers become operational constraints.

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       project_slug:
-        description: "Project slug — identifies the app and names its state folder (state/<project_slug>/)"
+        description: "Infisical project slug — selects the app's /reviews secrets and names its state folder (state/<project_slug>/)"
         required: true
         type: string
 
@@ -44,21 +44,27 @@ jobs:
         # Runs before secrets are set and without PROJECT_SLUG, so the
         # legacy-name state tests see a clean environment.
         run: PYTHONPATH=scripts python -m unittest discover -s tests -v
+      - name: Fetch review secrets from Infisical
+        # Per-app secrets live in the app's Infisical project, folder /reviews
+        # (APPSTORE_*, GOOGLE_PLAY_*, SLACK_CHANNEL_ID, SLACK_BOT_TOKEN). The
+        # payload's project_slug IS the Infisical project slug. export-type env
+        # injects each key as a masked env var for the following steps. The
+        # INFISICAL_* credentials are Lascade-Co org secrets (auto-provisioned,
+        # same pattern as Lascade-Co/actions). A platform whose keys are absent
+        # from /reviews is skipped by that provider's guard.
+        uses: Infisical/secrets-action@v1.0.15
+        with:
+          method: universal
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
+          env-slug: "prod"
+          domain: ${{ secrets.INFISICAL_DOMAIN }}
+          secret-path: /reviews
+          export-type: env
       - name: Sync Reviews and Slack Replies
-        # Provider secrets are read directly from this repo's GitHub Actions
-        # secrets. GitHub masks these in logs and never stores them in an event
-        # payload. To go multi-app, replace this env block with the Infisical
-        # import step (see centralised_plan.md).
         env:
           PROJECT_SLUG: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
-          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
-          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
-          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-          APPSTORE_APP_ID: ${{ secrets.APPSTORE_APP_ID }}
-          GOOGLE_PLAY_PACKAGE_NAME: ${{ secrets.GOOGLE_PLAY_PACKAGE_NAME }}
-          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: python scripts/main.py ${{ matrix.provider }}
       - name: Upload State
         if: always()

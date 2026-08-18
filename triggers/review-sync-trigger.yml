@@ -1,12 +1,16 @@
 # Copy this file into an APP repo at .github/workflows/review-sync-trigger.yml
-# and set the "project_slug" for that app.
+# and set the "project_slug" to the app's INFISICAL PROJECT SLUG.
 #
 # Requirements in the app repo:
-#   - Secret CENTRAL_DISPATCH_TOKEN: a PAT / GitHub App token allowed to POST
-#     repository_dispatch to the central repo (prapanch-lascade/Review-Bot-Scheduler).
+#   - Secret CENTRAL_DISPATCH_TOKEN: auto-provisioned as a Lascade-Co org
+#     secret (same one used by the Lascade-Co/actions build triggers).
+#   - The app's Infisical project must have a /reviews folder (prod env) with
+#     the review-bot keys (APPSTORE_*, GOOGLE_PLAY_*, SLACK_CHANNEL_ID,
+#     SLACK_BOT_TOKEN). Omit a platform's keys to skip that platform.
 #
-# The payload carries only the project slug (no secrets). It identifies the app
-# and names its state folder (state/<project_slug>/) in the central repo.
+# The payload carries only the project slug (no secrets). It selects the app's
+# Infisical /reviews secrets and names its state folder (state/<project_slug>/)
+# in the central repo.
 
 name: Trigger Review Sync
 
@@ -26,7 +30,7 @@ jobs:
         uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.CENTRAL_DISPATCH_TOKEN }}
-          repository: prapanch-lascade/Review-Bot-Scheduler   # <- central repo (owner/name)
+          repository: Lascade-Co/store-reviews   # <- central repo (owner/name)
           event-type: review-sync
           client-payload: >-
-            { "project_slug": "airlines70" }
+            { "project_slug": "the infisical project slug" }

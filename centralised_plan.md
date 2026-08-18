@@ -14,10 +14,12 @@ Design:
   central workflow runs App Store + Google Play as a matrix and writes per-app state under
   `state/<project_slug>/`. All logic — pagination, dedup, bounded polling/pruning, provider guards — is
   provider- and app-neutral.
-- **Secrets from the central repo's GitHub Actions secrets** (`prapanch-lascade/Review-Bot-Scheduler`).
-  Infisical is not used for now. One app (**airlines70**) is onboarded; its credentials are the
-  central repo's secrets. Adding more apps later changes only secret provisioning (§11), not the
-  logic.
+- **Per-app secrets from Infisical** (central repo: `Lascade-Co/store-reviews`). The payload's
+  `project_slug` is the app's **Infisical project slug**; the central workflow fetches the 8 keys
+  from that project's `/reviews` folder (prod env) via `Infisical/secrets-action` — the same
+  pattern `Lascade-Co/actions` uses for `/Build` and `/App-Env`. The `INFISICAL_CLIENT_ID/SECRET/
+  DOMAIN` and `CENTRAL_DISPATCH_TOKEN` credentials are Lascade-Co **org** GitHub secrets,
+  auto-provisioned to every repo in the org (§3, §11).
 - **One shared internal Slack bot** (created in the Lascade workspace → exempt from Slack's
   distributed-app rate cuts; keeps ~50 req/min, 1000 msgs/request).
 - **Full correctness/scale protection:** pagination, a persistent dedup set, and bounded polling
@@ -30,16 +32,16 @@ Design:
 ```
 App repo (airline70-flutter)   .github/workflows/review-sync-trigger.yml
    cron */5  →  peter-evans/repository-dispatch@v4
-   token: CENTRAL_DISPATCH_TOKEN   (allowed to dispatch to the central repo)
-   repository: prapanch-lascade/Review-Bot-Scheduler
+   token: CENTRAL_DISPATCH_TOKEN   (Lascade-Co org secret, auto-provisioned)
+   repository: Lascade-Co/store-reviews
    event-type: review-sync
-   client-payload: { "project_slug": "airlines70" }
+   client-payload: { "project_slug": "<the app's Infisical project slug>" }
         │
         ▼
 Central repo — .github/workflows/review-sync.yml
    on: repository_dispatch [review-sync]  +  workflow_dispatch (manual)
         │
-        ├── secrets: read the 8 provider/Slack secrets from the central repo's GitHub secrets
+        ├── secrets: Infisical/secrets-action → project <project_slug>, env prod, folder /reviews (8 keys)
         │
         ├── matrix [appstore, playstore]   (a provider self-skips if its secrets are absent)
         │     PAGINATED fetch → select-new via posted_ids → post new reviews oldest→newest
@@ -59,8 +61,8 @@ State is written to `state/airlines70/appstore.json` and `state/airlines70/plays
 
 ## 3. Secrets & configuration
 
-**On the central repo** (`prapanch-lascade/Review-Bot-Scheduler` → Settings → Secrets and variables →
-Actions → New repository secret):
+**In the app's Infisical project** (folder `/reviews`, prod environment — e.g. project `D1AS` for
+airlines70 on `secrets.lascade.com`):
 
 | Secret | Value |
 |---|---|
@@ -71,17 +73,19 @@ Actions → New repository secret):
 | `GOOGLE_PLAY_PACKAGE_NAME` | e.g. `com.lascade.airlines70` |
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | raw service-account JSON (not base64) |
 | `SLACK_CHANNEL_ID` | the app's Slack channel ID |
-| `SLACK_BOT_TOKEN` | the internal Slack bot token (`xoxb-…`) |
+| `SLACK_BOT_TOKEN` | the shared internal Slack bot token (`xoxb-…`, same value in every project) |
 
-**On the app repo** (`airline70-flutter`):
-- `CENTRAL_DISPATCH_TOKEN` — a token allowed to POST `repository_dispatch` to the central repo.
+**GitHub secrets** — nothing to configure by hand. `INFISICAL_CLIENT_ID`,
+`INFISICAL_CLIENT_SECRET`, `INFISICAL_DOMAIN` (used by the central workflow) and
+`CENTRAL_DISPATCH_TOKEN` (used by every app-repo trigger) are Lascade-Co **organization** secrets,
+auto-provisioned to all repos in the org — the same ones `Lascade-Co/actions` relies on.
 
 **Slack:** create the channel, invite the internal bot, and put the channel ID in `SLACK_CHANNEL_ID`.
 The Apple key must be able to read reviews and manage responses; the Google service account must
 have Play Console access to view and reply to reviews.
 
-A platform whose secrets are absent is skipped by the provider guard, so an iOS-only or Android-only
-app works by simply not setting that platform's secrets.
+A platform whose keys are absent from `/reviews` is skipped by the provider guard, so an iOS-only or
+Android-only app works by simply not adding that platform's keys.
 
 ---
 
@@ -240,17 +244,23 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Run Tests
         run: PYTHONPATH=scripts python -m unittest discover -s tests -v   # PROJECT_SLUG unset → clean env
+      - name: Fetch review secrets from Infisical
+        # project_slug IS the Infisical project slug; /reviews holds the 8 keys
+        # (APPSTORE_*, GOOGLE_PLAY_*, SLACK_CHANNEL_ID, SLACK_BOT_TOKEN).
+        # export-type env → each key becomes a masked env var for later steps.
+        uses: Infisical/secrets-action@v1.0.15
+        with:
+          method: universal
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
+          env-slug: "prod"
+          domain: ${{ secrets.INFISICAL_DOMAIN }}
+          secret-path: /reviews
+          export-type: env
       - name: Sync Reviews and Slack Replies
         env:
           PROJECT_SLUG: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
-          APPSTORE_API_KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
-          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
-          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
-          APPSTORE_APP_ID: ${{ secrets.APPSTORE_APP_ID }}
-          GOOGLE_PLAY_PACKAGE_NAME: ${{ secrets.GOOGLE_PLAY_PACKAGE_NAME }}
-          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
-          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: python scripts/main.py ${{ matrix.provider }}
       - name: Upload State
         if: always()
@@ -335,11 +345,11 @@ jobs:
     steps:
       - uses: peter-evans/repository-dispatch@v4
         with:
-          token: ${{ secrets.CENTRAL_DISPATCH_TOKEN }}
-          repository: prapanch-lascade/Review-Bot-Scheduler
+          token: ${{ secrets.CENTRAL_DISPATCH_TOKEN }}   # Lascade-Co org secret (auto-provisioned)
+          repository: Lascade-Co/store-reviews
           event-type: review-sync
           client-payload: >-
-            { "project_slug": "airlines70" }
+            { "project_slug": "<the app's Infisical project slug>" }
 ```
 
 ---
@@ -407,12 +417,20 @@ jobs:
 
 ---
 
-## 11. Future — multiple apps
-The architecture is already multi-app (per-app triggers, `project_slug` in the payload, per-app `state/<project_slug>/`
-folders). The **only** thing that changes when more apps are added is **secret provisioning** — the
-fixed-name central-repo secrets hold one app's credentials. To scale, move per-app secrets into
-**Infisical** (a `/reviews` folder per app project),
-replace the central workflow's env block with the `Infisical/secrets-action` step keyed by a
-`project_slug` from the trigger payload, and provision `INFISICAL_CLIENT_ID/SECRET/DOMAIN` +
-`CENTRAL_DISPATCH_TOKEN` as GitHub **org secrets** so every Lascade-Co repo inherits them. Nothing
-in §4–§5 (state schema, pagination, dedup, pruning) changes.
+## 11. Multiple apps — in place (Infisical)
+The platform is multi-app end to end: per-app triggers, `project_slug` in the payload, per-app
+`state/<project_slug>/` folders, and per-app secrets in **Infisical** (`/reviews` folder, prod env,
+in the project named by `project_slug`). The central workflow's secret step is
+`Infisical/secrets-action` keyed by the payload's slug; `INFISICAL_CLIENT_ID/SECRET/DOMAIN` +
+`CENTRAL_DISPATCH_TOKEN` are GitHub **org secrets** every Lascade-Co repo inherits. Nothing in
+§4–§5 (state schema, pagination, dedup, pruning) changed for this.
+
+**Onboarding an app:** create its Slack channel + invite the bot → create `/reviews` in its
+Infisical project (8 keys, §3; omit a platform's keys to skip that platform) → add the trigger
+workflow with its Infisical `project_slug`. First run does the initial sync and creates the state
+folder automatically.
+
+> Migration note: the original single-app state folder was `state/airlines70/`. With one-slug-for-
+> both, rename it to the app's Infisical project slug (`git mv state/airlines70 state/<slug>`)
+> **before** the first Infisical-driven run — otherwise the run starts a fresh initial sync and
+> re-posts the newest 5 reviews to Slack.
