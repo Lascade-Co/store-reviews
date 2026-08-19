@@ -333,39 +333,46 @@ REQUIRED_PLAYSTORE_ENV = (
 
 
 def run_playstore() -> None:
+    """Run one Google Play sync: fetch reviews, post new ones, apply Slack replies."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    # Provider guard: an iOS-only app has no GOOGLE_PLAY_* keys in its
+    # Infisical /reviews folder, so this job exits successfully without work.
     if not all(os.environ.get(name) for name in REQUIRED_PLAYSTORE_ENV):
         LOG.info("Google Play not configured for this app; skipping")
         return
+
     LOG.info("Generating Google Play OAuth access token")
     credentials = _credentials()
     state = load_state("playstore")
     original_state = copy.deepcopy(state)
+    # No last_review_id recorded yet means this app has never synced before.
     initial_sync = not bool(state.get("last_review_id"))
     slack = SlackClient()
-    existing_reply_state_changed = False
 
-    LOG.info("Fetching Google Play reviews")
-    if initial_sync:
-        reviews = fetch_reviews(credentials, max_pages=1)
-    else:
-        # Fetch the full (7-day-bounded) window; no boundary early-stop because
-        # Google's lastModified order is mutable (see fetch_reviews).
-        reviews = fetch_reviews(credentials)
-    LOG.info("Fetched %d Google Play review(s)", len(reviews))
-    for review in reviews:
-        review_id = _review_id(review)
-        if _has_developer_reply(review):
-            entry = state.get("reviews", {}).get(review_id)
-            if entry is not None and not entry.get("google_reply_sent"):
-                entry["google_reply_sent"] = True
-                existing_reply_state_changed = True
-                LOG.warning(
-                    "provider=Google Play review_id=%s existing developerComment detected; "
-                    "automatic overwrite disabled",
-                    review_id,
-                )
-    if reviews:
+    def flag_existing_developer_replies(reviews: list[dict]) -> bool:
+        # Operational visibility: mark reviews that already carry a developer
+        # reply (made outside this system, e.g. in the Play Console). The flag
+        # is diagnostic only — it never blocks a newer Slack reply.
+        changed = False
+        for review in reviews:
+            review_id = _review_id(review)
+            if _has_developer_reply(review):
+                entry = state.get("reviews", {}).get(review_id)
+                if entry is not None and not entry.get("google_reply_sent"):
+                    entry["google_reply_sent"] = True
+                    changed = True
+                    LOG.warning(
+                        "provider=Google Play review_id=%s existing developerComment detected; "
+                        "automatic overwrite disabled",
+                        review_id,
+                    )
+        return changed
+
+    def post_to_slack(reviews: list[dict]) -> None:
+        # Shared posting logic (same call the App Store provider makes):
+        # dedups against posted_ids, posts oldest-first, saves each Slack
+        # thread mapping, then advances last_review_id.
         post_new_reviews(
             "playstore",
             reviews,
@@ -377,17 +384,39 @@ def run_playstore() -> None:
             format_review,
             "google_reply_sent",
             _has_developer_reply,
+            # Google orders by lastModified, which edits can change — a
+            # boundary early-stop could hide a genuinely-new review sorted
+            # below an edited one, so scan the whole fetched window instead.
             stop_at_boundary=False,
         )
-    if existing_reply_state_changed:
-        save_if_changed("playstore", original_state, state)
 
     if initial_sync:
+        # First run: one page is enough to post the newest few reviews.
+        # Replies are NOT polled, so pre-existing Slack messages can never be
+        # mistaken for store replies.
+        LOG.info("Fetching Google Play reviews (initial sync)")
+        reviews = fetch_reviews(credentials, max_pages=1)
+        LOG.info("Fetched %d Google Play review(s)", len(reviews))
+        state_changed = flag_existing_developer_replies(reviews)
         if reviews:
+            post_to_slack(reviews)
             LOG.info("Google Play initial sync complete; saved %d review mapping(s)", len(state.get("reviews", {})))
         else:
             LOG.info("Google Play initial sync found no reviews")
+        if state_changed:
+            save_if_changed("playstore", original_state, state)
         return
+
+    # Incremental run: fetch the full (7-day-bounded) window, post anything
+    # new, then poll the active Slack threads and forward the newest human reply.
+    LOG.info("Fetching Google Play reviews")
+    reviews = fetch_reviews(credentials)
+    LOG.info("Fetched %d Google Play review(s)", len(reviews))
+    state_changed = flag_existing_developer_replies(reviews)
+    if reviews:
+        post_to_slack(reviews)
+    if state_changed:
+        save_if_changed("playstore", original_state, state)
 
     sync_slack_replies(
         "playstore",
@@ -397,6 +426,7 @@ def run_playstore() -> None:
         lambda review_id, text: reply_to_review(credentials, review_id, text),
         "Google Play",
     )
+
     if state != original_state:
         save_if_changed("playstore", original_state, state)
         LOG.info("Google Play state updated")

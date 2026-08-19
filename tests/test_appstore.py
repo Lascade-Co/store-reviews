@@ -2,12 +2,21 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from providers.appstore import INITIAL_SYNC_COUNT, _new_reviews, _reply_candidates, fetch_reviews
+from providers.appstore import INITIAL_SYNC_COUNT, _review_id, fetch_reviews
+from common.review_sync import reply_candidates, select_new_reviews
 from common.slack_client import SlackClient
 
 
 def review(review_id: str) -> dict:
     return {"id": review_id, "attributes": {"createdDate": review_id, "rating": 5}}
+
+
+def _new_reviews(reviews, state, initial_sync):
+    # Apple uses the shared selection with the boundary stop enabled
+    # (createdDate order is immutable, so stopping at last_review_id is safe).
+    return select_new_reviews(
+        reviews, state, initial_sync, INITIAL_SYNC_COUNT, _review_id, stop_at_boundary=True
+    )
 
 
 class AppStoreSyncTests(unittest.TestCase):
@@ -77,7 +86,7 @@ class AppStoreSyncTests(unittest.TestCase):
             {"ts": "3.0", "bot_id": "BOTHER", "text": "bot"},
         ]
 
-        result = _reply_candidates(messages, {"last_reply_ts": "1.5"}, client)
+        result = reply_candidates(messages, {"last_reply_ts": "1.5"}, client)
 
         self.assertEqual([message["ts"] for message in result], ["2.0"])
 
@@ -90,7 +99,7 @@ class AppStoreSyncTests(unittest.TestCase):
             {"ts": "4.0", "user": "U1", "subtype": "thread_broadcast", "text": "broadcast"},
         ]
 
-        result = _reply_candidates(messages, {"last_reply_ts": "1.0"}, client)
+        result = reply_candidates(messages, {"last_reply_ts": "1.0"}, client)
 
         self.assertEqual([message["ts"] for message in result], ["2.0"])
 

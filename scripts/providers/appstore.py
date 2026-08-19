@@ -1,19 +1,19 @@
+"""Apple App Store review synchronization provider.
+
+Same flow as the Google Play provider (playstore.py) and the same shared
+helpers: fetch_reviews -> post_new_reviews -> sync_slack_replies. Only the
+provider-specific parts differ (JWT auth, JSON:API pagination, and the
+immutable createdDate ordering that allows a boundary early-stop).
+"""
+
 import copy
 import logging
 import os
 
 from common.jwt_generator import generate_token
-from common.review_sync import reply_candidates as common_reply_candidates
-from common.review_sync import sync_slack_replies
+from common.review_sync import post_new_reviews, sync_slack_replies
 from common.slack_client import SlackClient
-from common.state_manager import (
-    load_state,
-    mark_posted,
-    now_iso,
-    save_if_changed,
-    save_state,
-    upsert_review,
-)
+from common.state_manager import load_state, save_if_changed
 from common.utils import current_ist, request_with_retries, utc_to_ist
 
 
@@ -157,63 +157,8 @@ def reply_to_review(token: str, review_id: str, text: str) -> None:
         raise RuntimeError(f"Apple reply response for {review_id} was invalid")
 
 
-def _new_reviews(reviews: list[dict], state: dict, initial_sync: bool) -> list[dict]:
-    known_ids = set(state.get("posted_ids", [])) | set(state.get("reviews", {}))
-    if initial_sync:
-        # Also makes an interrupted initial sync safely resumable.
-        return [review for review in reviews[:INITIAL_SYNC_COUNT] if review["id"] not in known_ids]
-
-    last_review_id = state.get("last_review_id")
-    if not last_review_id:
-        raise RuntimeError("Incremental sync requires last_review_id")
-
-    new_reviews = []
-    boundary_found = False
-    for review in reviews:
-        if review["id"] == last_review_id:
-            boundary_found = True
-            break
-        if review["id"] not in known_ids:
-            new_reviews.append(review)
-    if not boundary_found:
-        LOG.warning("last_review_id %s was not present in the fetched review set", last_review_id)
-    return new_reviews
-
-
-def sync_reviews_to_slack(reviews: list[dict], state: dict, slack: SlackClient, initial_sync: bool) -> None:
-    new_reviews = _new_reviews(reviews, state, initial_sync)
-    if not new_reviews:
-        LOG.info("No new reviews to send")
-        # Escape a stuck initial sync: if every fetched review is already known
-        # but the boundary was never recorded, set it so the next run goes
-        # incremental (and polls replies). No churn once last_review_id is set.
-        if reviews and not state.get("last_review_id"):
-            state["last_review_id"] = reviews[0]["id"]
-            save_state("appstore", state)
-        return
-
-    LOG.info("Sending %d new review(s) to Slack", len(new_reviews))
-    for review in reversed(new_reviews):
-        review_id = review["id"]
-        slack_ts = slack.post_review(format_review(review))
-        upsert_review(
-            state,
-            review_id,
-            slack_ts=slack_ts,
-            last_reply_ts=None,
-            posted_at=now_iso(),
-            apple_reply_sent=False,
-        )
-        mark_posted(state, review_id)
-        save_state("appstore", state)
-        LOG.info("Posted review %s to Slack thread %s", review_id, slack_ts)
-
-    state["last_review_id"] = reviews[0]["id"]
-    save_state("appstore", state)
-
-
-def _reply_candidates(messages: list[dict], state_entry: dict, slack: SlackClient) -> list[dict]:
-    return common_reply_candidates(messages, state_entry, slack)
+def _review_id(review: dict) -> str:
+    return review["id"]
 
 
 REQUIRED_APPSTORE_ENV = (
@@ -225,33 +170,63 @@ REQUIRED_APPSTORE_ENV = (
 
 
 def run_appstore() -> None:
+    """Run one App Store sync: fetch reviews, post new ones, apply Slack replies."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    # Provider guard: an Android-only app has no APPSTORE_* keys in its
+    # Infisical /reviews folder, so this job exits successfully without work.
     if not all(os.environ.get(name) for name in REQUIRED_APPSTORE_ENV):
         LOG.info("App Store not configured for this app; skipping")
         return
+
     LOG.info("Generating App Store Connect JWT")
     token = generate_token()
     state = load_state("appstore")
     original_state = copy.deepcopy(state)
+    # No last_review_id recorded yet means this app has never synced before.
     initial_sync = not bool(state.get("last_review_id"))
     slack = SlackClient()
 
-    LOG.info("Fetching App Store reviews")
-    if initial_sync:
-        # Only the newest page is needed to post the first few reviews.
-        reviews = fetch_reviews(token, max_pages=1)
-    else:
-        reviews = fetch_reviews(token, stop_at_id=state.get("last_review_id"))
-    LOG.info("Fetched %d review(s)", len(reviews))
-    if reviews:
-        sync_reviews_to_slack(reviews, state, slack, initial_sync)
+    def post_to_slack(reviews: list[dict]) -> None:
+        # Shared posting logic (same call the Google Play provider makes):
+        # dedups against posted_ids, posts oldest-first, saves each Slack
+        # thread mapping, then advances last_review_id.
+        post_new_reviews(
+            "appstore",
+            reviews,
+            state,
+            slack,
+            initial_sync,
+            INITIAL_SYNC_COUNT,
+            _review_id,
+            format_review,
+            "apple_reply_sent",
+            # createdDate order is immutable, so stopping the scan at the
+            # last_review_id boundary is safe for Apple (unlike Google).
+            stop_at_boundary=True,
+        )
 
     if initial_sync:
+        # First run: one page is enough to post the newest few reviews.
+        # Replies are NOT polled, so pre-existing Slack messages can never be
+        # mistaken for store replies.
+        LOG.info("Fetching App Store reviews (initial sync)")
+        reviews = fetch_reviews(token, max_pages=1)
+        LOG.info("Fetched %d review(s)", len(reviews))
         if reviews:
+            post_to_slack(reviews)
             LOG.info("Initial sync complete; saved %d review mapping(s)", len(state.get("reviews", {})))
         else:
             LOG.info("Initial sync found no reviews")
         return
+
+    # Incremental run: page until the last-seen review, post anything new,
+    # then poll the active Slack threads and forward the newest human reply.
+    LOG.info("Fetching App Store reviews")
+    reviews = fetch_reviews(token, stop_at_id=state.get("last_review_id"))
+    LOG.info("Fetched %d review(s)", len(reviews))
+    if reviews:
+        post_to_slack(reviews)
 
     sync_slack_replies(
         "appstore",
