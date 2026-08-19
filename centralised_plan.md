@@ -16,7 +16,8 @@ Design:
   provider- and app-neutral.
 - **Per-app secrets from Infisical** (central repo: `Lascade-Co/store-reviews`). The payload's
   `project_slug` is the app's **Infisical project slug**; the central workflow fetches the 8 keys
-  from that project's `/reviews` folder (prod env) via `Infisical/secrets-action` — the same
+  from that project's `/reviews` folder via `Infisical/secrets-action` (env selected by the
+  optional payload key `infisical_env`; default production) — the same
   pattern `Lascade-Co/actions` uses for `/Build` and `/App-Env`. The `INFISICAL_CLIENT_ID/SECRET/
   DOMAIN` and `CENTRAL_DISPATCH_TOKEN` credentials are Lascade-Co **org** GitHub secrets,
   auto-provisioned to every repo in the org (§3, §11).
@@ -61,8 +62,9 @@ State is written to `state/airlines70/appstore.json` and `state/airlines70/plays
 
 ## 3. Secrets & configuration
 
-**In the app's Infisical project** (folder `/reviews`, prod environment — e.g. project `D1AS` for
-airlines70 on `secrets.lascade.com`):
+**In the app's Infisical project** (folder `/reviews`, production environment by default — the
+trigger payload's optional `infisical_env` key can select staging/development; e.g. project `D1AS`
+for airlines70 on `secrets.lascade.com`):
 
 | Secret | Value |
 |---|---|
@@ -244,6 +246,19 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Run Tests
         run: PYTHONPATH=scripts python -m unittest discover -s tests -v   # PROJECT_SLUG unset → clean env
+      - name: Resolve Infisical Environment
+        # Optional payload key infisical_env: production|staging|development →
+        # env slugs prod|staging|dev. Absent/null/unknown → prod (default).
+        id: infisical_env
+        env:
+          REQUESTED_ENV: ${{ github.event.client_payload.infisical_env || inputs.infisical_env }}
+        run: |
+          case "$(echo "${REQUESTED_ENV}" | tr '[:upper:]' '[:lower:]')" in
+            staging)     slug="staging" ;;
+            development) slug="dev" ;;
+            *)           slug="prod" ;;
+          esac
+          echo "slug=${slug}" >> "$GITHUB_OUTPUT"
       - name: Fetch review secrets from Infisical
         # project_slug IS the Infisical project slug; /reviews holds the 8 keys
         # (APPSTORE_*, GOOGLE_PLAY_*, SLACK_CHANNEL_ID, SLACK_BOT_TOKEN).
@@ -254,7 +269,7 @@ jobs:
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           project-slug: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
-          env-slug: "prod"
+          env-slug: ${{ steps.infisical_env.outputs.slug }}
           domain: ${{ secrets.INFISICAL_DOMAIN }}
           secret-path: /reviews
           export-type: env
@@ -348,8 +363,12 @@ jobs:
           token: ${{ secrets.CENTRAL_DISPATCH_TOKEN }}   # Lascade-Co org secret (auto-provisioned)
           repository: Lascade-Co/store-reviews
           event-type: review-sync
+          # infisical_env is optional: production (default) | staging | development
           client-payload: >-
-            { "project_slug": "<the app's Infisical project slug>" }
+            {
+              "project_slug": "<the app's Infisical project slug>",
+              "infisical_env": "production"
+            }
 ```
 
 ---
@@ -419,8 +438,9 @@ jobs:
 
 ## 11. Multiple apps — in place (Infisical)
 The platform is multi-app end to end: per-app triggers, `project_slug` in the payload, per-app
-`state/<project_slug>/` folders, and per-app secrets in **Infisical** (`/reviews` folder, prod env,
-in the project named by `project_slug`). The central workflow's secret step is
+`state/<project_slug>/` folders, and per-app secrets in **Infisical** (`/reviews` folder in the
+project named by `project_slug`; environment from the optional `infisical_env` payload key,
+default production). The central workflow's secret step is
 `Infisical/secrets-action` keyed by the payload's slug; `INFISICAL_CLIENT_ID/SECRET/DOMAIN` +
 `CENTRAL_DISPATCH_TOKEN` are GitHub **org secrets** every Lascade-Co repo inherits. Nothing in
 §4–§5 (state schema, pagination, dedup, pruning) changed for this.

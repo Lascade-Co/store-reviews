@@ -182,7 +182,9 @@ The application repository uses the `CENTRAL_DISPATCH_TOKEN` Lascade-Co organiza
 
 ### 5.1 Secret Load
 
-The provider secrets are fetched with `Infisical/secrets-action@v1.0.15` (`method: universal`) from the application's Infisical project — `project-slug` comes from the dispatch payload, `env-slug: prod`, `secret-path: /reviews` — and exported as masked environment variables (`APPSTORE_*`, `GOOGLE_PLAY_*`, `SLACK_CHANNEL_ID`, `SLACK_BOT_TOKEN`) for the following steps (`export-type: env`). The Infisical machine-identity credentials (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_DOMAIN`) are Lascade-Co organization GitHub secrets. `PROJECT_SLUG` (from the payload) is also set on the sync step, and names the state folder.
+The provider secrets are fetched with `Infisical/secrets-action@v1.0.15` (`method: universal`) from the application's Infisical project — `project-slug` comes from the dispatch payload, `secret-path: /reviews` — and exported as masked environment variables (`APPSTORE_*`, `GOOGLE_PLAY_*`, `SLACK_CHANNEL_ID`, `SLACK_BOT_TOKEN`) for the following steps (`export-type: env`). The Infisical machine-identity credentials (`INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`, `INFISICAL_DOMAIN`) are Lascade-Co organization GitHub secrets. `PROJECT_SLUG` (from the payload) is also set on the sync step, and names the state folder.
+
+The Infisical environment is selected by the optional payload key `infisical_env` (`production`, `staging`, or `development`, mapped to the Infisical env slugs `prod`, `staging`, `dev`). When the key is absent, null, empty, or any unrecognized value, the workflow defaults to **production**. Manual `workflow_dispatch` runs expose the same choice as an input.
 
 ### 5.2 App Store Reviews Job
 
@@ -776,7 +778,7 @@ python3 -m compileall -q scripts tests
 
 ### 23.1 Infisical per-application secrets
 
-In the application's Infisical project, create a `/reviews` folder (prod environment) holding the review-bot keys. Include only the platforms the app ships (an Android-only app omits the `APPSTORE_*` keys; an iOS-only app omits the `GOOGLE_PLAY_*` keys — the absent platform's job self-skips):
+In the application's Infisical project, create a `/reviews` folder (in the production environment — the default; staging/development are used only when the trigger payload sets `infisical_env`) holding the review-bot keys. Include only the platforms the app ships (an Android-only app omits the `APPSTORE_*` keys; an iOS-only app omits the `GOOGLE_PLAY_*` keys — the absent platform's job self-skips):
 
 ```text
 APPSTORE_API_KEY_ID               (App Store)
@@ -896,7 +898,7 @@ The Slack app is the visible sender inside Slack. The store response is publishe
 
 The architecture is multi-application: per-application triggers, a `project_slug` in the payload, per-application `state/<project_slug>/` folders, and app-neutral logic (pagination, dedup, pruning, provider guards). The same provider code serves every application, and which provider runs is derived automatically from which secrets are present in the app's `/reviews` folder (iOS-only, Android-only, or both).
 
-Secret provisioning is per-application via **Infisical**: the central workflow's secret-load step is the `Infisical/secrets-action`, keyed by the payload's `project_slug` (the Infisical project slug), reading the `/reviews` folder of the prod environment. The Infisical machine-identity credentials (`INFISICAL_CLIENT_ID/SECRET/DOMAIN`) and `CENTRAL_DISPATCH_TOKEN` are GitHub **organization** secrets, so every consumer repo inherits them — the same pattern as the `Lascade-Co/actions` central build workflows (which read `/Build` and `/App-Env` the same way).
+Secret provisioning is per-application via **Infisical**: the central workflow's secret-load step is the `Infisical/secrets-action`, keyed by the payload's `project_slug` (the Infisical project slug), reading the `/reviews` folder of the environment chosen by the optional payload key `infisical_env` (default: production). The Infisical machine-identity credentials (`INFISICAL_CLIENT_ID/SECRET/DOMAIN`) and `CENTRAL_DISPATCH_TOKEN` are GitHub **organization** secrets, so every consumer repo inherits them — the same pattern as the `Lascade-Co/actions` central build workflows (which read `/Build` and `/App-Env` the same way).
 
 ### Adding an application
 
