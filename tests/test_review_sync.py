@@ -44,6 +44,13 @@ class DecodeSlackTextTests(unittest.TestCase):
 
 
 class SyncRepliesDecodeTests(unittest.TestCase):
+    def setUp(self):
+        # sync_slack_replies persists state via save_state; mock it so tests
+        # never write real files into the repo's state/ folder.
+        patcher = patch("common.review_sync.save_state")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_store_reply_and_hash_use_decoded_text(self):
         slack = Mock()
         slack.is_human_message.side_effect = lambda message: message.get("user") == "U1"

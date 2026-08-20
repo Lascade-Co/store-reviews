@@ -32,6 +32,15 @@ def review(review_id="play-1"):
 
 
 class PlayStoreTests(unittest.TestCase):
+    def setUp(self):
+        # The reply-sync tests exercise sync_slack_replies, which persists
+        # state via save_state; mock it so tests never write real files into
+        # the repo's state/ folder (PROJECT_SLUG is unset during tests, which
+        # would otherwise create the legacy state/playstore_reviews.json).
+        patcher = patch("common.review_sync.save_state")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_documented_title_body_separator_is_supported(self):
         self.assertEqual(_split_title_body("Title\tBody"), ("Title", "Body"))
         self.assertIn("Google Play", format_review(review()))
