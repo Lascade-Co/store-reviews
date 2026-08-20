@@ -103,43 +103,67 @@ def post_new_reviews(
     reply_sent_key: str,
     reply_sent_getter=None,
     stop_at_boundary: bool = True,
+    baseline_all_fetched: bool = False,
 ) -> None:
-    """Post selected reviews oldest-first and persist each Slack mapping."""
+    """Post selected reviews oldest-first and persist each Slack mapping.
+
+    ``baseline_all_fetched`` (used by Google, whose selection has no boundary
+    stop): on the initial sync, record EVERY fetched review id in posted_ids —
+    not just the few that were posted — so the next run treats the rest of the
+    window as already seen and posts only reviews that appear afterwards.
+    """
     new_reviews = select_new_reviews(
         reviews, state, initial_sync, initial_count, review_id_getter, stop_at_boundary
     )
-    if not new_reviews:
+    if new_reviews:
+        LOG.info("Sending %d new %s review(s) to Slack", len(new_reviews), provider)
+        for review in reversed(new_reviews):
+            review_id = review_id_getter(review)
+            slack_ts = slack.post_review(formatter(review))
+            upsert_review(
+                state,
+                review_id,
+                slack_ts=slack_ts,
+                last_reply_ts=None,
+                posted_at=now_iso(),
+                **{
+                    reply_sent_key: (
+                        bool(reply_sent_getter(review))
+                        if reply_sent_getter
+                        else False
+                    )
+                },
+            )
+            mark_posted(state, review_id)
+            save_state(provider, state)
+            LOG.info("Posted %s review %s to Slack thread %s", provider, review_id, slack_ts)
+        state["last_review_id"] = review_id_getter(reviews[0])
+        save_state(provider, state)
+    else:
         LOG.info("No new %s reviews to send", provider)
-        # Escape a stuck initial sync (see appstore.sync_reviews_to_slack).
+        # Escape a stuck initial sync: if every fetched review is already known
+        # but the boundary was never recorded, set it so the next run goes
+        # incremental (and polls replies).
         if reviews and not state.get("last_review_id"):
             state["last_review_id"] = review_id_getter(reviews[0])
             save_state(provider, state)
-        return
 
-    LOG.info("Sending %d new %s review(s) to Slack", len(new_reviews), provider)
-    for review in reversed(new_reviews):
-        review_id = review_id_getter(review)
-        slack_ts = slack.post_review(formatter(review))
-        upsert_review(
-            state,
-            review_id,
-            slack_ts=slack_ts,
-            last_reply_ts=None,
-            posted_at=now_iso(),
-            **{
-                reply_sent_key: (
-                    bool(reply_sent_getter(review))
-                    if reply_sent_getter
-                    else False
-                )
-            },
-        )
-        mark_posted(state, review_id)
-        save_state(provider, state)
-        LOG.info("Posted %s review %s to Slack thread %s", provider, review_id, slack_ts)
-
-    state["last_review_id"] = review_id_getter(reviews[0])
-    save_state(provider, state)
+    if initial_sync and baseline_all_fetched and reviews:
+        skipped = 0
+        posted = set(state.get("posted_ids", []))
+        for review in reviews:
+            review_id = review_id_getter(review)
+            if review_id not in posted:
+                mark_posted(state, review_id)
+                posted.add(review_id)
+                skipped += 1
+        if skipped:
+            save_state(provider, state)
+            LOG.info(
+                "Baselined %d pre-existing %s review(s); they are marked as seen and will never be posted",
+                skipped,
+                provider,
+            )
 
 
 def reply_candidates(messages: list[dict], state_entry: dict, slack: SlackClient) -> list[dict]:

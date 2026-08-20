@@ -1,7 +1,13 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from common.review_sync import decode_slack_text, reply_hash, select_new_reviews, sync_slack_replies
+from common.review_sync import (
+    decode_slack_text,
+    post_new_reviews,
+    reply_hash,
+    select_new_reviews,
+    sync_slack_replies,
+)
 
 
 def review(review_id: str) -> dict:
@@ -90,6 +96,38 @@ class BoundarySelectionTests(unittest.TestCase):
         )
 
         self.assertEqual([item["id"] for item in result], ["new"])
+
+    def test_initial_sync_baselines_whole_window_so_second_run_posts_only_new(self):
+        # Google (no boundary stop): initial sync posts the newest 5 but must
+        # mark EVERY fetched id as seen, otherwise the second run would treat
+        # the rest of the 7-day window as "new" and flood Slack with old reviews.
+        slack = Mock()
+        slack.post_review.side_effect = lambda text: f"ts-{text}"
+        state = {"last_review_id": None, "posted_ids": [], "reviews": {}}
+        window = [review(f"r{n}") for n in range(9, 0, -1)]  # r9 newest .. r1
+
+        with patch("common.review_sync.save_state"):
+            post_new_reviews(
+                "playstore", window, state, slack, initial_sync=True,
+                initial_count=5, review_id_getter=_id, formatter=_id,
+                reply_sent_key="google_reply_sent",
+                stop_at_boundary=False, baseline_all_fetched=True,
+            )
+        self.assertEqual(slack.post_review.call_count, 5)  # newest 5 posted
+        self.assertEqual(set(state["posted_ids"]), {f"r{n}" for n in range(1, 10)})
+
+        # Second run: window now also holds new reviews r10 and r11.
+        slack.post_review.reset_mock()
+        window2 = [review(f"r{n}") for n in range(11, 0, -1)]
+        with patch("common.review_sync.save_state"):
+            post_new_reviews(
+                "playstore", window2, state, slack, initial_sync=False,
+                initial_count=5, review_id_getter=_id, formatter=_id,
+                reply_sent_key="google_reply_sent",
+                stop_at_boundary=False, baseline_all_fetched=True,
+            )
+        posted = [call.args[0] for call in slack.post_review.call_args_list]
+        self.assertEqual(posted, ["r10", "r11"])  # old r1-r4 never posted
 
     def test_apple_scan_still_stops_at_boundary(self):
         reviews = [review("new"), review("boundary"), review("below")]

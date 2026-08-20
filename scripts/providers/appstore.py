@@ -206,28 +206,29 @@ def run_appstore() -> None:
             stop_at_boundary=True,
         )
 
+    # Fetch: the first run needs only one page (it posts just the newest few);
+    # incremental runs page until the last-seen review (createdDate order is
+    # immutable, so stopping at the boundary is safe for Apple).
+    LOG.info("Fetching App Store reviews%s", " (initial sync)" if initial_sync else "")
     if initial_sync:
-        # First run: one page is enough to post the newest few reviews.
-        # Replies are NOT polled, so pre-existing Slack messages can never be
-        # mistaken for store replies.
-        LOG.info("Fetching App Store reviews (initial sync)")
         reviews = fetch_reviews(token, max_pages=1)
-        LOG.info("Fetched %d review(s)", len(reviews))
+    else:
+        reviews = fetch_reviews(token, stop_at_id=state.get("last_review_id"))
+    LOG.info("Fetched %d review(s)", len(reviews))
+    if reviews:
+        post_to_slack(reviews)
+
+    if initial_sync:
+        # Replies are NOT polled on the first run, so pre-existing Slack
+        # messages can never be mistaken for store replies.
         if reviews:
-            post_to_slack(reviews)
             LOG.info("Initial sync complete; saved %d review mapping(s)", len(state.get("reviews", {})))
         else:
             LOG.info("Initial sync found no reviews")
         return
 
-    # Incremental run: page until the last-seen review, post anything new,
-    # then poll the active Slack threads and forward the newest human reply.
-    LOG.info("Fetching App Store reviews")
-    reviews = fetch_reviews(token, stop_at_id=state.get("last_review_id"))
-    LOG.info("Fetched %d review(s)", len(reviews))
-    if reviews:
-        post_to_slack(reviews)
-
+    # Incremental run continues: poll the active Slack threads and forward
+    # the newest human reply to the store.
     sync_slack_replies(
         "appstore",
         state,

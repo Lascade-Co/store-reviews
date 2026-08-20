@@ -354,17 +354,18 @@ Slack replies are not processed during initial synchronization.
 
 The Google Play provider follows the same behavior:
 
-1. Fetches reviews.
+1. Fetches the full review window (the API returns roughly the last 7 days).
 2. Normalizes and sorts them newest-first using the documented user-comment timestamp.
 3. Selects a maximum of five reviews.
 4. Removes any review already present in state.
 5. Posts them oldest-to-newest.
 6. Saves Slack thread mappings.
 7. Sets `last_review_id` to the newest review.
-8. Saves state.
-9. Returns without polling Slack replies.
+8. **Baselines the rest of the window**: every fetched review id — not just the five posted — is recorded in `posted_ids`. Because Google's selection has no boundary stop, this is what keeps the next run from treating the remaining window as "new" and flooding Slack with old reviews; after the baseline, only reviews that appear later are ever posted.
+9. Saves state.
+10. Returns without polling Slack replies.
 
-This behavior prevents a fresh installation from processing old Slack messages as store replies.
+This behavior prevents a fresh installation from processing old Slack messages as store replies, and from back-posting pre-existing reviews. (The App Store provider needs no baseline: its immutable `createdDate` boundary stop already prevents older reviews from being selected.)
 
 ## 10. Incremental Review Synchronization
 

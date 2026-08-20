@@ -388,28 +388,17 @@ def run_playstore() -> None:
             # boundary early-stop could hide a genuinely-new review sorted
             # below an edited one, so scan the whole fetched window instead.
             stop_at_boundary=False,
+            # On the initial sync, mark every fetched id as seen (only the
+            # newest few are posted); without this, the next run would treat
+            # the rest of the 7-day window as "new" and flood Slack with them.
+            baseline_all_fetched=True,
         )
 
-    if initial_sync:
-        # First run: one page is enough to post the newest few reviews.
-        # Replies are NOT polled, so pre-existing Slack messages can never be
-        # mistaken for store replies.
-        LOG.info("Fetching Google Play reviews (initial sync)")
-        reviews = fetch_reviews(credentials, max_pages=1)
-        LOG.info("Fetched %d Google Play review(s)", len(reviews))
-        state_changed = flag_existing_developer_replies(reviews)
-        if reviews:
-            post_to_slack(reviews)
-            LOG.info("Google Play initial sync complete; saved %d review mapping(s)", len(state.get("reviews", {})))
-        else:
-            LOG.info("Google Play initial sync found no reviews")
-        if state_changed:
-            save_if_changed("playstore", original_state, state)
-        return
-
-    # Incremental run: fetch the full (7-day-bounded) window, post anything
-    # new, then poll the active Slack threads and forward the newest human reply.
-    LOG.info("Fetching Google Play reviews")
+    # Fetch the whole 7-day window on every run — including the initial sync,
+    # where the full window is needed to baseline every visible review id
+    # (only the newest few are posted). Google's lastModified ordering is
+    # mutable, so there is no boundary early-stop (see fetch_reviews).
+    LOG.info("Fetching Google Play reviews%s", " (initial sync)" if initial_sync else "")
     reviews = fetch_reviews(credentials)
     LOG.info("Fetched %d Google Play review(s)", len(reviews))
     state_changed = flag_existing_developer_replies(reviews)
@@ -418,6 +407,17 @@ def run_playstore() -> None:
     if state_changed:
         save_if_changed("playstore", original_state, state)
 
+    if initial_sync:
+        # Replies are NOT polled on the first run, so pre-existing Slack
+        # messages can never be mistaken for store replies.
+        if reviews:
+            LOG.info("Google Play initial sync complete; saved %d review mapping(s)", len(state.get("reviews", {})))
+        else:
+            LOG.info("Google Play initial sync found no reviews")
+        return
+
+    # Incremental run continues: poll the active Slack threads and forward
+    # the newest human reply to the store.
     sync_slack_replies(
         "playstore",
         state,
