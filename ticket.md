@@ -41,7 +41,7 @@ The current platform supports:
 
 ```text
 App repository (one per application)
-  Trigger workflow: schedule every 5 minutes or manual dispatch
+  Trigger workflow: schedule twice daily (10:00 & 17:00 IST) or manual dispatch
                     │
                     │ repository_dispatch: review-sync
                     │ client-payload: { project_slug }
@@ -169,7 +169,7 @@ Each application repository holds a small trigger workflow, copied from:
 triggers/review-sync-trigger.yml
 ```
 
-It runs on a five-minute schedule (and manual dispatch) and sends a `repository_dispatch` to the central repository:
+It runs twice daily — 10:00 and 17:00 IST (`cron: "30 4,11 * * *"` in UTC) — plus manual dispatch, and sends a `repository_dispatch` to the central repository:
 
 ```yaml
 client-payload: >-
@@ -726,7 +726,7 @@ Reply polling calls `conversations.replies` once per active thread per run; the 
 Fetch pagination follows the provider's next-page link up to a page cap (Apple 25 pages, Google 10). If the incremental boundary is somehow beyond the cap in a single run, a warning is logged (older reviews are fetched on subsequent runs). For normal cadence the boundary is reached well within the cap.
 
 ### 21.7 GitHub Actions scheduling
-Cron is not second-precise and can be delayed under GitHub load, so the effective latency floor is roughly the 5-minute schedule, not instant.
+Cron is not second-precise and can be delayed under GitHub load. With the twice-daily schedule (10:00 and 17:00 IST), a new review or a Slack reply waits until the next scheduled run to be processed — worst case roughly 17 hours (overnight). Run the central workflow manually (`workflow_dispatch`) when something needs to go out immediately.
 
 ## 22. Testing
 

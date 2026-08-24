@@ -32,7 +32,7 @@ Design:
 
 ```
 App repo (airline70-flutter)   .github/workflows/review-sync-trigger.yml
-   cron */5  →  peter-evans/repository-dispatch@v4
+   cron 10:00 & 17:00 IST  →  peter-evans/repository-dispatch@v4
    token: CENTRAL_DISPATCH_TOKEN   (Lascade-Co org secret, auto-provisioned)
    repository: Lascade-Co/store-reviews
    event-type: review-sync
@@ -351,7 +351,7 @@ name: Trigger Review Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"     # runs only on the repo's DEFAULT branch
+    - cron: "30 4,11 * * *"   # 10:00 & 17:00 IST (UTC cron); runs only on the repo's DEFAULT branch
 permissions:
   contents: read
 jobs:
