@@ -55,7 +55,8 @@ def format_review(review: dict) -> str:
 *Platform:* Apple App Store
 *Review ID:* {review_id}
 *Detected:* {current_ist()}
-""".strip() + "\n\n"
+
+"""
 
 
 def _validate_review(review: object) -> None:
