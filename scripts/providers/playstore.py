@@ -259,7 +259,7 @@ def format_review(review: dict) -> str:
 *Platform:* Google Play
 *Review ID:* {_escape_slack(review["reviewId"])}
 *Detected:* {current_ist()}
-\n\n
+-----------
 """
 
 
