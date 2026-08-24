@@ -43,7 +43,7 @@ def format_review(review: dict) -> str:
     review_id = _escape_slack(review["id"])
 
     return f"""
-*New Appstore Review*
+🍎 *New Appstore Review*
 
 *Rating:* {rating}/5
 *Title:* {title}

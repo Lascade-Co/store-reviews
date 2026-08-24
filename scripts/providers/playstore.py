@@ -247,7 +247,7 @@ def format_review(review: dict) -> str:
     title, body = _split_title_body(_display_value(comment.get("text"), ""))
     rating = _rating_value(comment.get("starRating"))
     return f"""
-*New Playstore Review*
+🤖 *New Playstore Review*
 
 *Rating:* {rating}/5
 *Title:* {_escape_slack(title)}
