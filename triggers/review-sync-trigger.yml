@@ -1,24 +1,15 @@
-# Copy this file into an APP repo at .github/workflows/review-sync-trigger.yml
-# and set the "project_slug" to the app's INFISICAL PROJECT SLUG.
-#
-# Requirements in the app repo:
-#
-#   - The app's Infisical project must have a /reviews folder (prod env) with
-#     the review-bot keys (APPSTORE_*, GOOGLE_PLAY_*, SLACK_CHANNEL_ID,
-#     SLACK_BOT_TOKEN). Omit a platform's keys to skip that platform.
-#
-# Optional payload key "infisical_env": which Infisical environment to read
-# ("production", "staging", or "development"). Absent, null, or any other
-# value falls back to production — omit it for normal apps.
+# Trigger for the centralised review sync (Lascade-Co/store-reviews).
+# Copy this file into the app repo at .github/workflows/review-sync-trigger.yml
+# and set "project_slug" to the app's Infisical project slug.
+# Full setup guide: review.md in the central repo.
 
 name: Trigger Review Sync
 
 on:
   workflow_dispatch:
   schedule:
-    # Twice daily at 10:00 and 17:00 IST. GitHub cron is UTC, so
-    # 10:00 IST = 04:30 UTC and 17:00 IST = 11:30 UTC. GitHub may delay
-    # scheduled runs by a few minutes under load.
+    # ~10:00 & ~17:00 IST (cron is UTC). Same cron for every app — do not
+    # edit; the stagger step below spreads apps out automatically.
     - cron: "30 4,11 * * *"
 
 permissions:
@@ -28,15 +19,30 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
+      - name: Stagger start (repo-specific delay; skipped on manual runs)
+        if: github.event_name == 'schedule'
+        run: |
+          OFFSET=$(( $(cksum <<< "$GITHUB_REPOSITORY" | cut -d' ' -f1) % 300 ))
+          DISPATCH_AT=$(date -u -d "+${OFFSET} seconds" '+%H:%M:%S')
+          echo "Repository:       ${GITHUB_REPOSITORY}"
+          echo "Stagger delay:    ${OFFSET}s (deterministic, derived from the repo name)"
+          echo "Current time:     $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
+          echo "Dispatching at:   ${DISPATCH_AT} UTC"
+          REMAINING=${OFFSET}
+          while [ "${REMAINING}" -gt 0 ]; do
+            STEP=$(( REMAINING < 60 ? REMAINING : 60 ))
+            echo "$(date -u '+%H:%M:%S') UTC | waiting, ${REMAINING}s left (dispatch at ${DISPATCH_AT} UTC)"
+            sleep "${STEP}"
+            REMAINING=$(( REMAINING - STEP ))
+          done
+          echo "$(date -u '+%H:%M:%S') UTC | stagger complete, dispatching now"
+
       - name: Dispatch to central review-bot
         uses: peter-evans/repository-dispatch@v4
         with:
           token: ${{ secrets.CENTRAL_DISPATCH_TOKEN }}
-          repository: Lascade-Co/store-reviews 
+          repository: Lascade-Co/store-reviews
           event-type: review-sync
-          # infisical_env is optional: production (default) | staging | development
+          # project_slug is the app's Infisical project slug
           client-payload: >-
-            {
-              "project_slug": "the infisical project slug",
-              "infisical_env": "production"
-            }
+            { "project_slug": "the infisical project slug" }

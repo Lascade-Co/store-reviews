@@ -10,12 +10,6 @@ on:
         description: "Infisical project slug — selects the app's /reviews secrets and names its state folder (state/<project_slug>/)"
         required: true
         type: string
-      infisical_env:
-        description: "Infisical environment for the /reviews secrets"
-        required: false
-        type: choice
-        options: [production, staging, development]
-        default: production
 
 concurrency:
   group: review-sync-${{ github.event.client_payload.project_slug || inputs.project_slug }}
@@ -50,44 +44,32 @@ jobs:
         # Runs before secrets are set and without PROJECT_SLUG, so the
         # legacy-name state tests see a clean environment.
         run: PYTHONPATH=scripts python -m unittest discover -s tests -v
-      - name: Resolve Infisical Environment
-        # The optional payload key infisical_env selects the Infisical
-        # environment (production, staging, development). Anything else —
-        # absent, null, empty, or an unknown value — falls back to production.
-        # Maps display values to Infisical env slugs (prod, staging, dev).
-        id: infisical_env
-        env:
-          REQUESTED_ENV: ${{ github.event.client_payload.infisical_env || inputs.infisical_env }}
-        run: |
-          case "$(echo "${REQUESTED_ENV}" | tr '[:upper:]' '[:lower:]')" in
-            staging)     slug="staging" ;;
-            development) slug="dev" ;;
-            production)  slug="prod" ;;
-            *)           slug="prod" ;;
-          esac
-          echo "Using Infisical environment slug: ${slug} (requested: '${REQUESTED_ENV:-<unset>}')"
-          echo "slug=${slug}" >> "$GITHUB_OUTPUT"
       - name: Fetch review secrets from Infisical
         # Per-app secrets live in the app's Infisical project, folder /reviews
-        # (APPSTORE_*, GOOGLE_PLAY_*, SLACK_CHANNEL_ID, SLACK_BOT_TOKEN). The
-        # payload's project_slug IS the Infisical project slug. export-type env
-        # injects each key as a masked env var for the following steps. The
-        # INFISICAL_* credentials are Lascade-Co org secrets (auto-provisioned,
-        # same pattern as Lascade-Co/actions). A platform whose keys are absent
-        # from /reviews is skipped by that provider's guard.
+        # (APPSTORE_*, GOOGLE_PLAY_*, SLACK_CHANNEL_ID). The payload's
+        # project_slug IS the Infisical project slug. export-type env injects
+        # each key as a masked env var for the following steps. A platform
+        # whose keys are absent from /reviews is skipped by that provider's
+        # guard. The shared SLACK_BOT_TOKEN is NOT per-app: it comes from this
+        # repo's GitHub secrets on the sync step below.
         uses: Infisical/secrets-action@v1.0.15
         with:
           method: universal
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           project-slug: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
-          env-slug: ${{ steps.infisical_env.outputs.slug }}
+          env-slug: "prod"
           domain: ${{ secrets.INFISICAL_DOMAIN }}
           secret-path: /reviews
           export-type: env
       - name: Sync Reviews and Slack Replies
         env:
           PROJECT_SLUG: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
+          # One internal bot serves every app, so its token lives once on this
+          # repo instead of in every app's Infisical folder. Step-level env
+          # wins over the Infisical-exported vars, so a leftover
+          # SLACK_BOT_TOKEN in /reviews is ignored.
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: python scripts/main.py ${{ matrix.provider }}
       - name: Upload State
         if: always()
