@@ -10,8 +10,9 @@ import copy
 import logging
 import os
 
+from common.ai_reply import generate_suggested_reply
 from common.jwt_generator import generate_token
-from common.review_sync import post_new_reviews, sync_slack_replies
+from common.review_sync import format_suggestion_section, post_new_reviews, sync_slack_replies
 from common.slack_client import SlackClient
 from common.state_manager import load_state, save_if_changed
 from common.utils import current_ist, request_with_retries, utc_to_ist
@@ -31,7 +32,7 @@ def _escape_slack(value: object) -> str:
     return str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def format_review(review: dict) -> str:
+def format_review(review: dict, suggested_reply: str | None = None) -> str:
     """Format an Apple review without allowing review content to alter Slack markup."""
     attr = review["attributes"]
     rating = attr.get("rating", 0)
@@ -41,6 +42,7 @@ def format_review(review: dict) -> str:
     territory = _escape_slack(attr.get("territory", "Unknown"))
     reviewed_on = utc_to_ist(attr["createdDate"])
     review_id = _escape_slack(review["id"])
+    suggestion_section = format_suggestion_section(suggested_reply, _escape_slack)
 
     return f"""
 🍎 *New Appstore Review*
@@ -55,7 +57,7 @@ def format_review(review: dict) -> str:
 *Platform:* Apple App Store
 *Review ID:* {review_id}
 *Detected:* {current_ist()}
------------
+{suggestion_section}-----------
 """
 
 
@@ -162,6 +164,17 @@ def _review_id(review: dict) -> str:
     return review["id"]
 
 
+def _suggest_reply(review: dict) -> str | None:
+    """Ask the AI for a suggested response to this review (None on any failure)."""
+    attr = review.get("attributes", {})
+    return generate_suggested_reply(
+        "Apple App Store",
+        attr.get("rating", 0),
+        str(attr.get("title") or "").strip() or "No Title",
+        str(attr.get("body") or "").strip() or "No review text provided.",
+    )
+
+
 REQUIRED_APPSTORE_ENV = (
     "APPSTORE_API_KEY_ID",
     "APPSTORE_ISSUER_ID",
@@ -205,6 +218,7 @@ def run_appstore() -> None:
             # createdDate order is immutable, so stopping the scan at the
             # last_review_id boundary is safe for Apple (unlike Google).
             stop_at_boundary=True,
+            suggestion_generator=_suggest_reply,
         )
 
     # Fetch: the first run needs only one page (it posts just the newest few);

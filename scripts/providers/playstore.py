@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
-from common.review_sync import post_new_reviews, sync_slack_replies
+from common.ai_reply import generate_suggested_reply
+from common.review_sync import format_suggestion_section, post_new_reviews, sync_slack_replies
 from common.slack_client import SlackClient
 from common.state_manager import load_state, save_if_changed
 from common.utils import IST, current_ist, request_with_retries
@@ -242,10 +243,11 @@ def _review_date(comment: dict) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).astimezone(IST).strftime("%d %b %Y, %I:%M %p IST")
 
 
-def format_review(review: dict) -> str:
+def format_review(review: dict, suggested_reply: str | None = None) -> str:
     comment = _user_comment(review)
     title, body = _split_title_body(_display_value(comment.get("text"), ""))
     rating = _rating_value(comment.get("starRating"))
+    suggestion_section = format_suggestion_section(suggested_reply, _escape_slack)
     return f"""
 🤖 *New Playstore Review*
 
@@ -259,12 +261,24 @@ def format_review(review: dict) -> str:
 *Platform:* Google Play
 *Review ID:* {_escape_slack(review["reviewId"])}
 *Detected:* {current_ist()}
------------
+{suggestion_section}-----------
 """
 
 
 def _review_id(review: dict) -> str:
     return review["reviewId"]
+
+
+def _suggest_reply(review: dict) -> str | None:
+    """Ask the AI for a suggested response to this review (None on any failure)."""
+    comment = _user_comment(review)
+    title, body = _split_title_body(_display_value(comment.get("text"), ""))
+    return generate_suggested_reply(
+        "Google Play",
+        _rating_value(comment.get("starRating")),
+        title,
+        body,
+    )
 
 
 def _prepare_reply(text: str, review_id: str) -> str:
@@ -393,6 +407,7 @@ def run_playstore() -> None:
             # newest few are posted); without this, the next run would treat
             # the rest of the 7-day window as "new" and flood Slack with them.
             baseline_all_fetched=True,
+            suggestion_generator=_suggest_reply,
         )
 
     # Fetch the whole 7-day window on every run — including the initial sync,
