@@ -3,6 +3,8 @@ from unittest.mock import Mock, patch
 
 from common.review_sync import (
     decode_slack_text,
+    format_suggestion_section,
+    has_human_reaction,
     post_new_reviews,
     reply_hash,
     select_new_reviews,
@@ -116,7 +118,7 @@ class BoundarySelectionTests(unittest.TestCase):
         with patch("common.review_sync.save_state"):
             post_new_reviews(
                 "playstore", window, state, slack, initial_sync=True,
-                initial_count=5, review_id_getter=_id, formatter=_id,
+                initial_count=5, review_id_getter=_id, formatter=lambda r, s=None: _id(r),
                 reply_sent_key="google_reply_sent",
                 stop_at_boundary=False, baseline_all_fetched=True,
             )
@@ -129,7 +131,7 @@ class BoundarySelectionTests(unittest.TestCase):
         with patch("common.review_sync.save_state"):
             post_new_reviews(
                 "playstore", window2, state, slack, initial_sync=False,
-                initial_count=5, review_id_getter=_id, formatter=_id,
+                initial_count=5, review_id_getter=_id, formatter=lambda r, s=None: _id(r),
                 reply_sent_key="google_reply_sent",
                 stop_at_boundary=False, baseline_all_fetched=True,
             )
@@ -150,6 +152,175 @@ class BoundarySelectionTests(unittest.TestCase):
         )
 
         self.assertEqual([item["id"] for item in result], ["new"])
+
+
+def _slack_with_parent(parent: dict) -> Mock:
+    slack = Mock()
+    slack.bot_user_id = "UBOT"
+    # Only U1 counts as human; the bot parent and bot messages are filtered.
+    slack.is_human_message.side_effect = lambda message: message.get("user") == "U1"
+    slack.replies.return_value = [parent]
+    return slack
+
+
+def _parent(reactions=None) -> dict:
+    message = {"ts": "100.000", "user": "UBOT", "text": "review parent"}
+    if reactions is not None:
+        message["reactions"] = reactions
+    return message
+
+
+class ReactionApprovalTests(unittest.TestCase):
+    def setUp(self):
+        # sync_slack_replies persists state via save_state; mock it so tests
+        # never write real files into the repo's state/ folder.
+        patcher = patch("common.review_sync.save_state")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def entry(self, **overrides) -> dict:
+        base = {"slack_ts": "100.000", "suggested_reply": "Thanks! We appreciate it."}
+        base.update(overrides)
+        return base
+
+    def test_reaction_sends_suggested_reply_once(self):
+        state = {"reviews": {"r1": self.entry()}}
+        slack = _slack_with_parent(_parent([{"name": "joy", "count": 1, "users": ["U1"]}]))
+        send_reply = Mock()
+
+        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
+
+        send_reply.assert_called_once_with("r1", "Thanks! We appreciate it.")
+        entry = state["reviews"]["r1"]
+        self.assertEqual(entry["last_sent_reply_hash"], reply_hash("Thanks! We appreciate it."))
+        self.assertTrue(entry["google_reply_sent"])
+        self.assertTrue(entry["replied_at"])
+
+        # Second run with the reaction still present: already sent → no resend.
+        send_reply.reset_mock()
+        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
+        send_reply.assert_not_called()
+
+    def test_typed_reply_beats_reaction(self):
+        state = {"reviews": {"r1": self.entry()}}
+        parent = _parent([{"name": "+1", "count": 1, "users": ["U1"]}])
+        slack = _slack_with_parent(parent)
+        slack.replies.return_value = [parent, {"ts": "101.000", "user": "U1", "text": "Custom answer"}]
+        send_reply = Mock()
+
+        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
+
+        send_reply.assert_called_once_with("r1", "Custom answer")
+
+    def test_reaction_ignored_after_any_reply_was_sent(self):
+        # The change-within-2-days flow: a typed reply owns the response;
+        # the lingering reaction must never resend the suggestion.
+        state = {
+            "reviews": {
+                "r1": self.entry(last_sent_reply_hash=reply_hash("Custom answer"), last_reply_ts="101.000")
+            }
+        }
+        slack = _slack_with_parent(_parent([{"name": "+1", "count": 2, "users": ["U1", "U2"]}]))
+        send_reply = Mock()
+
+        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
+
+        send_reply.assert_not_called()
+
+    def test_bot_only_reaction_is_ignored(self):
+        state = {"reviews": {"r1": self.entry()}}
+        slack = _slack_with_parent(_parent([{"name": "+1", "count": 1, "users": ["UBOT"]}]))
+        send_reply = Mock()
+
+        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
+
+        send_reply.assert_not_called()
+
+    def test_reaction_without_stored_suggestion_is_skipped(self):
+        state = {"reviews": {"r1": self.entry(suggested_reply=None)}}
+        slack = _slack_with_parent(_parent([{"name": "eyes", "count": 1, "users": ["U1"]}]))
+        send_reply = Mock()
+
+        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
+
+        send_reply.assert_not_called()
+        self.assertNotIn("last_sent_reply_hash", state["reviews"]["r1"])
+
+    def test_no_reaction_and_no_reply_does_nothing(self):
+        state = {"reviews": {"r1": self.entry()}}
+        slack = _slack_with_parent(_parent())
+        send_reply = Mock()
+
+        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
+
+        send_reply.assert_not_called()
+        self.assertNotIn("last_sent_reply_hash", state["reviews"]["r1"])
+
+    def test_truncated_users_list_counts_as_human(self):
+        # Slack may truncate users while count stays accurate; the bot never
+        # reacts, so a higher count means a human reacted.
+        self.assertTrue(has_human_reaction({"reactions": [{"name": "joy", "count": 3, "users": []}]}, "UBOT"))
+        self.assertFalse(has_human_reaction({"reactions": [{"name": "joy", "count": 1, "users": ["UBOT"]}]}, "UBOT"))
+        self.assertFalse(has_human_reaction({"reactions": []}, "UBOT"))
+        self.assertFalse(has_human_reaction(None, "UBOT"))
+
+
+class SuggestionPostingTests(unittest.TestCase):
+    def test_suggestion_is_posted_and_stored(self):
+        slack = Mock()
+        slack.post_review.return_value = "200.000"
+        formatted = []
+
+        def formatter(review, suggested_reply):
+            formatted.append(suggested_reply)
+            return "message"
+
+        state = {"reviews": {}, "posted_ids": [], "last_review_id": None}
+        with patch("common.review_sync.save_state"):
+            post_new_reviews(
+                "playstore",
+                [review("g1")],
+                state,
+                slack,
+                initial_sync=True,
+                initial_count=5,
+                review_id_getter=_id,
+                formatter=formatter,
+                reply_sent_key="google_reply_sent",
+                suggestion_generator=lambda r: "AI suggestion",
+            )
+
+        self.assertEqual(formatted, ["AI suggestion"])
+        self.assertEqual(state["reviews"]["g1"]["suggested_reply"], "AI suggestion")
+
+    def test_failed_suggestion_posts_review_without_it(self):
+        slack = Mock()
+        slack.post_review.return_value = "200.000"
+        state = {"reviews": {}, "posted_ids": [], "last_review_id": None}
+        with patch("common.review_sync.save_state"):
+            post_new_reviews(
+                "playstore",
+                [review("g1")],
+                state,
+                slack,
+                initial_sync=True,
+                initial_count=5,
+                review_id_getter=_id,
+                formatter=lambda r, s: "message",
+                reply_sent_key="google_reply_sent",
+                suggestion_generator=lambda r: None,
+            )
+
+        self.assertNotIn("suggested_reply", state["reviews"]["g1"])
+        slack.post_review.assert_called_once()
+
+    def test_suggestion_section_formatting(self):
+        escape = lambda value: str(value).replace("&", "&amp;")
+        section = format_suggestion_section("Thanks & sorry", escape)
+        self.assertIn("💡 *Suggested Reply:* Thanks &amp; sorry", section)
+        self.assertIn("React to this message (any emoji)", section)
+        self.assertEqual(format_suggestion_section(None, escape), "")
+        self.assertEqual(format_suggestion_section("", escape), "")
 
 
 if __name__ == "__main__":

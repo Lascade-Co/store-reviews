@@ -70,6 +70,10 @@ jobs:
           # wins over the Infisical-exported vars, so a leftover
           # SLACK_BOT_TOKEN in /reviews is ignored.
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          # Shared Groq key for AI-suggested replies (central repo secret,
+          # same pattern as the bot token). Absent key = suggestions are
+          # skipped; the sync itself never depends on the AI.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: python scripts/main.py ${{ matrix.provider }}
       - name: Upload State
         if: always()
