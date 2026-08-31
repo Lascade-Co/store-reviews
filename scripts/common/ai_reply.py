@@ -89,21 +89,38 @@ def generate_suggested_reply(platform: str, rating: object, title: str, body: st
             {"role": "user", "content": review_text},
         ],
         "temperature": 0.4,
-        "max_completion_tokens": 400,
+        # gpt-oss models are REASONING models: their hidden reasoning tokens
+        # consume the completion budget before the JSON answer is written. A
+        # small cap intermittently yields an empty generation, which Groq
+        # rejects with 400 json_validate_failed (failed_generation: ""). Keep
+        # reasoning short and leave generous headroom for the answer.
+        "reasoning_effort": "low",
+        "max_completion_tokens": 1536,
         "response_format": _RESPONSE_FORMAT,
     }
 
     try:
         # Generation is idempotent, so the shared retry policy (network, 429
-        # with retry-after, 5xx) is safe to apply.
-        response = request_with_retries(
-            "POST",
-            GROQ_API_URL,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json=payload,
-            timeout=45,
-            operation="Groq suggested reply",
-        )
+        # honoring Retry-After, 5xx) is safe to apply. On top of that, Groq
+        # recommends retrying schema-validation failures (the model can emit
+        # an invalid/empty generation nondeterministically), so 400
+        # json_validate_failed gets a couple of fresh attempts of its own.
+        for attempt in range(3):
+            response = request_with_retries(
+                "POST",
+                GROQ_API_URL,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=payload,
+                timeout=45,
+                operation="Groq suggested reply",
+            )
+            if response.status_code == 400 and "json_validate_failed" in (response.text or ""):
+                LOG.warning(
+                    "Groq suggested reply generation was invalid (attempt %d/3); retrying",
+                    attempt + 1,
+                )
+                continue
+            break
         if not response.ok:
             LOG.warning(
                 "Groq suggested reply failed: http_status=%s body=%s",
