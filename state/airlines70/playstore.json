@@ -1,7 +1,7 @@
 {
     "state_version": 2,
     "last_review_id": "300c7948-cc19-445d-994a-59ad489fc65b",
-    "last_checked": "2026-08-31T10:08:46.641087+00:00",
+    "last_checked": "2026-08-31T10:13:53.452491+00:00",
     "posted_ids": [
         "300c7948-cc19-445d-994a-59ad489fc65b",
         "689a7b81-c7ff-414e-968e-b6ff512f1bfc",
@@ -13,21 +13,26 @@
             "last_reply_ts": null,
             "posted_at": "2026-08-31T10:08:30.377622+00:00",
             "google_reply_sent": false,
-            "suggested_reply": "Muito obrigado pelo seu feedback positivo! Ficamos felizes em saber que o app facilita a sua vida. Se precisar de ajuda ou tiver sugest\u00f5es, estamos \u00e0 disposi\u00e7\u00e3o. Boa experi\u00eancia!"
+            "suggested_reply": "Muito obrigado pelo seu feedback positivo! Ficamos felizes em saber que o app facilita a sua vida. Se precisar de ajuda ou tiver sugest\u00f5es, estamos \u00e0 disposi\u00e7\u00e3o. Boa experi\u00eancia!",
+            "slack_thread_disabled": false
         },
         "ed763c71-8f04-4cdb-ae73-52e193f7f433": {
             "slack_ts": "1788170912.975799",
             "last_reply_ts": null,
             "posted_at": "2026-08-31T10:08:33.044761+00:00",
-            "google_reply_sent": false,
-            "suggested_reply": "Thank you for the great review! We're thrilled you love our flight booking app. Your support means a lot to us. Enjoy your travels!"
+            "google_reply_sent": true,
+            "suggested_reply": "Thank you for the great review! We're thrilled you love our flight booking app. Your support means a lot to us. Enjoy your travels!",
+            "last_sent_reply_hash": "cf993ae2e75b42adb5e7600f94b9881aa44e044f0fd7fa66fbd7c5e8d58b2557",
+            "replied_at": "2026-08-31T10:13:53.325478+00:00",
+            "slack_thread_disabled": false
         },
         "300c7948-cc19-445d-994a-59ad489fc65b": {
             "slack_ts": "1788170926.569949",
             "last_reply_ts": null,
             "posted_at": "2026-08-31T10:08:46.639058+00:00",
             "google_reply_sent": false,
-            "suggested_reply": "Thank you for the positive feedback! We're thrilled you had a great booking experience. Enjoy using the app!"
+            "suggested_reply": "Thank you for the positive feedback! We're thrilled you had a great booking experience. Enjoy using the app!",
+            "slack_thread_disabled": false
         }
     }
 }
