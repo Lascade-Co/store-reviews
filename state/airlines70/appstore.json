@@ -1,0 +1,46 @@
+{
+    "state_version": 2,
+    "last_review_id": "00000183-b32a-6203-56dd-c5f400000000",
+    "last_checked": "2026-08-31T08:28:09.811306+00:00",
+    "posted_ids": [
+        "00000183-b32a-6202-f94b-f64d00000000",
+        "00000183-b32a-6202-f94d-6ded00000000",
+        "00000183-b32a-6203-4583-a8c200000000",
+        "00000183-b32a-6203-473e-17ab00000000",
+        "00000183-b32a-6203-56dd-c5f400000000"
+    ],
+    "reviews": {
+        "00000183-b32a-6202-f94b-f64d00000000": {
+            "slack_ts": "1788164885.560469",
+            "last_reply_ts": null,
+            "posted_at": "2026-08-31T08:28:05.608796+00:00",
+            "apple_reply_sent": false,
+            "suggested_reply": "Thank you for the fantastic feedback! We're thrilled you love the features and support. Your recommendation means a lot to us. Enjoy the game!"
+        },
+        "00000183-b32a-6202-f94d-6ded00000000": {
+            "slack_ts": "1788164886.808409",
+            "last_reply_ts": null,
+            "posted_at": "2026-08-31T08:28:06.866854+00:00",
+            "apple_reply_sent": false
+        },
+        "00000183-b32a-6203-4583-a8c200000000": {
+            "slack_ts": "1788164887.721099",
+            "last_reply_ts": null,
+            "posted_at": "2026-08-31T08:28:07.771506+00:00",
+            "apple_reply_sent": false
+        },
+        "00000183-b32a-6203-473e-17ab00000000": {
+            "slack_ts": "1788164888.483629",
+            "last_reply_ts": null,
+            "posted_at": "2026-08-31T08:28:08.533127+00:00",
+            "apple_reply_sent": false,
+            "suggested_reply": "Thank you for your feedback. We strive to provide value through features and support. We appreciate your perspective and will consider it as we continue to improve. If you have any suggestions, feel free to share."
+        },
+        "00000183-b32a-6203-56dd-c5f400000000": {
+            "slack_ts": "1788164889.680389",
+            "last_reply_ts": null,
+            "posted_at": "2026-08-31T08:28:09.730744+00:00",
+            "apple_reply_sent": false
+        }
+    }
+}
