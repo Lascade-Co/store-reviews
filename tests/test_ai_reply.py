@@ -48,6 +48,39 @@ class AiReplyTests(unittest.TestCase):
 
     @patch.dict(os.environ, {"GROQ_API_KEY": "gsk-test"})
     @patch("common.ai_reply.request_with_retries")
+    def test_json_validate_failed_is_retried_then_succeeds(self, request):
+        # gpt-oss can nondeterministically emit an empty/invalid generation;
+        # Groq returns 400 json_validate_failed and recommends retrying.
+        failed = Mock(ok=False, status_code=400, text='{"error":{"code":"json_validate_failed","failed_generation":""}}')
+        request.side_effect = [failed, groq_response(json.dumps({"reply": "Thanks!"}))]
+
+        result = generate_suggested_reply("Apple App Store", 1, "T", "B")
+
+        self.assertEqual(result, "Thanks!")
+        self.assertEqual(request.call_count, 2)
+
+    @patch.dict(os.environ, {"GROQ_API_KEY": "gsk-test"})
+    @patch("common.ai_reply.request_with_retries")
+    def test_json_validate_failed_gives_up_after_three_attempts(self, request):
+        failed = Mock(ok=False, status_code=400, text='{"error":{"code":"json_validate_failed","failed_generation":""}}')
+        request.side_effect = [failed, failed, failed]
+
+        self.assertIsNone(generate_suggested_reply("Apple App Store", 1, "T", "B"))
+        self.assertEqual(request.call_count, 3)
+
+    @patch.dict(os.environ, {"GROQ_API_KEY": "gsk-test"})
+    @patch("common.ai_reply.request_with_retries")
+    def test_reasoning_headroom_parameters_are_sent(self, request):
+        request.return_value = groq_response(json.dumps({"reply": "ok"}))
+
+        generate_suggested_reply("Google Play", 5, "T", "B")
+
+        payload = request.call_args.kwargs["json"]
+        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertGreaterEqual(payload["max_completion_tokens"], 1024)
+
+    @patch.dict(os.environ, {"GROQ_API_KEY": "gsk-test"})
+    @patch("common.ai_reply.request_with_retries")
     def test_network_exception_returns_none(self, request):
         request.side_effect = RuntimeError("connection reset")
 
