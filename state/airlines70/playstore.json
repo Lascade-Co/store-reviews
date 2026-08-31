@@ -1,0 +1,17 @@
+{
+    "state_version": 2,
+    "last_review_id": "689a7b81-c7ff-414e-968e-b6ff512f1bfc",
+    "last_checked": "2026-08-31T08:53:08.117780+00:00",
+    "posted_ids": [
+        "689a7b81-c7ff-414e-968e-b6ff512f1bfc"
+    ],
+    "reviews": {
+        "689a7b81-c7ff-414e-968e-b6ff512f1bfc": {
+            "slack_ts": "1788166388.059899",
+            "last_reply_ts": null,
+            "posted_at": "2026-08-31T08:53:08.116337+00:00",
+            "google_reply_sent": false,
+            "suggested_reply": "Muito obrigado pelo seu feedback positivo! Fico feliz que o app esteja facilitando sua vida. Se precisar de ajuda ou tiver sugest\u00f5es, estamos \u00e0 disposi\u00e7\u00e3o!"
+        }
+    }
+}
