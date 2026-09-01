@@ -327,10 +327,35 @@ class SuggestionPostingTests(unittest.TestCase):
     def test_suggestion_section_formatting(self):
         escape = lambda value: str(value).replace("&", "&amp;")
         section = format_suggestion_section("Thanks & sorry", escape)
-        self.assertIn("💡 *Suggested Reply:* Thanks &amp; sorry", section)
+        self.assertIn("*Suggested Reply:* Thanks &amp; sorry", section)
         self.assertIn("React to this message (any emoji)", section)
+        # ASCII-only marker: Slack rewrites unicode emoji in stored text to
+        # colon shortcodes, so an emoji here would break extraction.
+        self.assertNotIn("💡", section)
         self.assertEqual(format_suggestion_section(None, escape), "")
         self.assertEqual(format_suggestion_section("", escape), "")
+
+    def test_extraction_handles_old_bulb_format_messages(self):
+        # Messages posted by the earlier format contained a 💡, which Slack
+        # stores as ":bulb:". The ASCII marker must still match them.
+        text = (
+            "review body\n"
+            ":bulb: *Suggested Reply:* Thank you for your wonderful review! "
+            "We appreciate your support.\n\n"
+            "_React to this message (any emoji) to send the suggested reply, "
+            "or type your own reply in this thread._\n-----------\n"
+        )
+        self.assertEqual(
+            extract_suggested_reply({"text": text}),
+            "Thank you for your wonderful review! We appreciate your support.",
+        )
+
+    def test_extraction_requires_hint_line(self):
+        # A review body that merely says "Suggested Reply:" must not be
+        # mistaken for a real suggestion section.
+        self.assertIsNone(
+            extract_suggested_reply({"text": "review: my *Suggested Reply:* was ignored\n-----------"})
+        )
 
     def test_extraction_round_trips_the_formatted_message(self):
         # What the formatter writes (with Slack escaping) must come back out

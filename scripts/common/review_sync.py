@@ -24,8 +24,11 @@ def reply_hash(text: str) -> str:
 # The Slack review message is the ONLY store of the suggested reply (state is
 # in a public repo, so unapproved AI text is deliberately not persisted there).
 # Extraction below parses the text between these two markers, so formatter and
-# extractor must always use the same constants.
-_SUGGESTION_PREFIX = "💡 *Suggested Reply:* "
+# extractor must always use the same constants. Both markers are deliberately
+# ASCII-only: Slack converts unicode emoji in stored message text to colon
+# shortcodes (💡 comes back as ":bulb:"), so an emoji in the marker would
+# never match the fetched text.
+_SUGGESTION_PREFIX = "*Suggested Reply:* "
 _SUGGESTION_HINT = (
     "_React to this message (any emoji) to send the suggested reply, "
     "or type your own reply in this thread._"
@@ -33,27 +36,35 @@ _SUGGESTION_HINT = (
 
 
 def format_suggestion_section(suggested_reply: str | None, escape) -> str:
-    """Return the 💡 block appended to a review message, or an empty string."""
+    """Return the Suggested Reply block for a review message, or an empty string."""
     if not suggested_reply:
         return ""
-    return f"\n{_SUGGESTION_PREFIX}{escape(suggested_reply)}\n\n{_SUGGESTION_HINT}\n"
+    return f"\n\n{_SUGGESTION_PREFIX}{escape(suggested_reply)}\n\n{_SUGGESTION_HINT}\n\n"
 
 
 def extract_suggested_reply(parent_message: object) -> str | None:
     """Recover the suggested reply from the posted Slack review message.
 
     Slack returns the message with our entity escaping intact and bare URLs
-    auto-wrapped in angle brackets; decode_slack_text reverses both.
+    auto-wrapped in angle brackets; decode_slack_text reverses both. The hint
+    line must be present after the prefix — a genuine section always carries
+    it, which keeps a review body that merely mentions "Suggested Reply:" from
+    being mistaken for one.
     """
     if not isinstance(parent_message, dict):
         return None
     text = parent_message.get("text")
-    if not isinstance(text, str) or _SUGGESTION_PREFIX not in text:
+    if not isinstance(text, str):
         return None
-    suggestion = text.split(_SUGGESTION_PREFIX, 1)[1]
+    # The real section is always the last occurrence (review content is
+    # escaped and comes before it).
+    start = text.rfind(_SUGGESTION_PREFIX)
+    if start == -1:
+        return None
+    suggestion = text[start + len(_SUGGESTION_PREFIX):]
+    if _SUGGESTION_HINT not in suggestion:
+        return None
     suggestion = suggestion.split(_SUGGESTION_HINT, 1)[0]
-    # Drop the dashed footer if the hint line was somehow absent.
-    suggestion = suggestion.split("\n-----------", 1)[0]
     suggestion = decode_slack_text(suggestion).strip()
     return suggestion or None
 

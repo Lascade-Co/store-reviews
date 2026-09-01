@@ -57,7 +57,7 @@ App Store / Google Play
   forwarded.
 - Google Play replies are truncated to **350 characters** (store limit). Slack formatting
   (links, `&`, mentions) is automatically converted to plain text before sending.
-- Each review message includes an **AI-suggested reply** (💡, generated via OpenAI, in the review's
+- Each review message includes an **AI-suggested reply** (generated via OpenAI, in the review's
   own language). **React to the review message with any emoji** to send the suggestion to the store
   on the next run — or ignore it and type your own reply in the thread as usual.
 
@@ -200,7 +200,7 @@ Done. From now on the schedule handles everything; no manual state setup is ever
 ## Day-to-day usage (for developers answering reviews)
 
 - New reviews appear as messages (🍎 App Store / 🤖 Play Store), each with its own thread and a
-  **💡 Suggested Reply** written by AI.
+  **Suggested Reply** written by AI.
 - **To send the suggested reply:** react to the review message with **any emoji** (👍, ✅, anything).
   The next run publishes the suggestion as the official store response. ⚠️ Because *any* emoji
   counts as approval, don't react to a review message unless you mean "send it".
@@ -233,8 +233,8 @@ the next run.
 | Slack `not_in_channel` / `channel_not_found` | The bot isn't a member of the channel (Step 1.2) or `SLACK_CHANNEL_ID` is wrong. |
 | Google Play returns 0 reviews | Normal: the Play API only returns reviews **created/modified in the last 7 days** that have text, production track only. |
 | Trigger run fails with 404/401 on dispatch | `CENTRAL_DISPATCH_TOKEN` missing in the app repo — ask the backend team. |
-| Review posted without a 💡 Suggested Reply section | `OPENAI_API_KEY` (central repo GitHub secret) missing, or the OpenAI call failed for that run — the sync itself is unaffected. A review posted without a suggestion never gets one later; reply in the thread instead. |
-| Reacted to a review but nothing was sent | Reactions only work while **no** response has been sent yet, the review must still be inside its 7-day window, and the review message must contain a 💡 Suggested Reply section. Otherwise type the reply in the thread. |
+| Review posted without a Suggested Reply section | `OPENAI_API_KEY` (central repo GitHub secret) missing, or the OpenAI call failed for that run — the sync itself is unaffected. A review posted without a suggestion never gets one later; reply in the thread instead. |
+| Reacted to a review but nothing was sent | Reactions only work while **no** response has been sent yet, the review must still be inside its 7-day window, and the review message must contain a Suggested Reply section. Otherwise type the reply in the thread. |
 | Reply typed but nothing sent | Was it >7 days after the review was posted (or >2 days after the previous reply)? The thread is no longer polled — this is the designed window. |
 
 ## Repo layout (central repo)
