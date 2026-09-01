@@ -1,7 +1,7 @@
 {
     "state_version": 2,
     "last_review_id": "300c7948-cc19-445d-994a-59ad489fc65b",
-    "last_checked": "2026-09-01T08:44:05.086287+00:00",
+    "last_checked": "2026-09-01T08:53:10.411227+00:00",
     "posted_ids": [
         "300c7948-cc19-445d-994a-59ad489fc65b",
         "ed763c71-8f04-4cdb-ae73-52e193f7f433"
@@ -16,11 +16,11 @@
         },
         "300c7948-cc19-445d-994a-59ad489fc65b": {
             "slack_ts": "1788252150.641589",
-            "last_reply_ts": null,
+            "last_reply_ts": "1788252631.351159",
             "posted_at": "2026-09-01T08:42:30.716038+00:00",
             "google_reply_sent": true,
-            "last_sent_reply_hash": "e939a9ab11472e1c758a1f77576d478e04d72d68fdc5f6c3d5c3e8f386559543",
-            "replied_at": "2026-09-01T08:44:05.084025+00:00",
+            "last_sent_reply_hash": "2b2c08616c22afc2fefa7ba258f8b5ebbc856e983ed01bc40ee88951c7aeb9de",
+            "replied_at": "2026-09-01T08:53:10.405138+00:00",
             "slack_thread_disabled": false
         }
     }
