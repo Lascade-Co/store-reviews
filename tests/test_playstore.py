@@ -55,7 +55,9 @@ class PlayStoreTests(unittest.TestCase):
         }
         message = format_review(empty_review)
 
-        self.assertIn("No Title", message)
+        # Google Play has no separate title field, so the format shows no
+        # Title line (unlike the App Store format).
+        self.assertNotIn("*Title:*", message)
         self.assertIn("No review text provided.", message)
         self.assertIn("0/5", message)
         self.assertIn("Anonymous", message)

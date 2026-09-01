@@ -252,7 +252,6 @@ def format_review(review: dict, suggested_reply: str | None = None) -> str:
 🤖 *New Playstore Review*
 
 *Rating:* {rating}/5
-*Title:* {_escape_slack(title)}
 *Review:* {_escape_slack(body)}
 
 *Reviewer:* {_escape_slack(_display_value(review.get("authorName"), "Anonymous"))}

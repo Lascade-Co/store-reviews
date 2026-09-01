@@ -1,4 +1,4 @@
-"""Groq-backed suggested developer replies for store reviews.
+"""OpenAI-backed suggested developer replies for store reviews.
 
 Generation is an optional enhancement: every failure path returns None so the
 sync run itself can never break because the AI is unavailable. The suggestion
@@ -15,10 +15,10 @@ from common.utils import request_with_retries
 
 LOG = logging.getLogger(__name__)
 
-GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-# gpt-oss models are Groq's current production text models with strict
-# structured-output support (the llama-3.x models are deprecated on Groq).
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
+OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+# gpt-5.6-luna is the current-generation efficient model: best small-tier
+# quality (multilingual included) at $0.20/$1.20 per 1M tokens.
+DEFAULT_OPENAI_MODEL = "gpt-5.6-luna"
 # Google Play rejects replies over ~350 characters; keep a safety margin and
 # use the same budget for Apple so suggestions read consistently.
 MAX_SUGGESTED_REPLY_LENGTH = 340
@@ -64,8 +64,7 @@ def _extract_reply(data: object) -> str | None:
         parsed = json.loads(content)
         reply = parsed.get("reply") if isinstance(parsed, dict) else None
     except ValueError:
-        # Defensive fallback: a model without strict schema support may return
-        # the reply as plain text.
+        # Defensive fallback: treat non-JSON content as the reply itself.
         reply = content
     if not isinstance(reply, str):
         return None
@@ -75,9 +74,9 @@ def _extract_reply(data: object) -> str | None:
 
 def generate_suggested_reply(platform: str, rating: object, title: str, body: str) -> str | None:
     """Return a suggested developer reply for a review, or None when unavailable."""
-    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
-        LOG.debug("GROQ_API_KEY not set; skipping suggested reply generation")
+        LOG.debug("OPENAI_API_KEY not set; skipping suggested reply generation")
         return None
 
     review_text = (
@@ -87,58 +86,48 @@ def generate_suggested_reply(platform: str, rating: object, title: str, body: st
         f"Review: {body}"
     )
     payload = {
-        "model": os.environ.get("GROQ_MODEL", "").strip() or DEFAULT_GROQ_MODEL,
+        "model": os.environ.get("OPENAI_MODEL", "").strip() or DEFAULT_OPENAI_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": review_text},
         ],
-        "temperature": 0.4,
-        # gpt-oss models are REASONING models: their hidden reasoning tokens
-        # consume the completion budget before the JSON answer is written. A
-        # small cap intermittently yields an empty generation, which Groq
-        # rejects with 400 json_validate_failed (failed_generation: ""). Keep
-        # reasoning short and leave generous headroom for the answer.
+        # gpt-5.6-luna is a REASONING model that defaults to medium effort:
+        # hidden reasoning tokens count against max_completion_tokens (and are
+        # billed as output). Keep reasoning low and leave generous headroom so
+        # the JSON answer is never truncated away.
         "reasoning_effort": "low",
         "max_completion_tokens": 1536,
         "response_format": _RESPONSE_FORMAT,
     }
 
     try:
-        # Generation is idempotent, so the shared retry policy (network, 429
-        # honoring Retry-After, 5xx) is safe to apply. On top of that, Groq
-        # recommends retrying schema-validation failures (the model can emit
-        # an invalid/empty generation nondeterministically), so 400
-        # json_validate_failed gets a couple of fresh attempts of its own.
-        for attempt in range(3):
-            response = request_with_retries(
-                "POST",
-                GROQ_API_URL,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=payload,
-                timeout=45,
-                operation="Groq suggested reply",
-            )
-            if response.status_code == 400 and "json_validate_failed" in (response.text or ""):
-                LOG.warning(
-                    "Groq suggested reply generation was invalid (attempt %d/3); retrying",
-                    attempt + 1,
-                )
-                continue
-            break
+        # Generation is idempotent, so the shared retry policy is safe here:
+        # network errors and 5xx retry with backoff, and 429 rate limits sleep
+        # exactly the Retry-After header before retrying (up to 3 retries).
+        # A rejected 429 request is not billed. On final failure the review is
+        # simply posted without a suggestion.
+        response = request_with_retries(
+            "POST",
+            OPENAI_API_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=60,
+            operation="OpenAI suggested reply",
+        )
         if not response.ok:
             LOG.warning(
-                "Groq suggested reply failed: http_status=%s body=%s",
+                "OpenAI suggested reply failed: http_status=%s body=%s",
                 response.status_code,
                 response.text[:300],
             )
             return None
         reply = _extract_reply(response.json())
         if not reply:
-            LOG.warning("Groq suggested reply response contained no usable reply text")
+            LOG.warning("OpenAI suggested reply response contained no usable reply text")
             return None
         if len(reply) > MAX_SUGGESTED_REPLY_LENGTH:
             reply = reply[:MAX_SUGGESTED_REPLY_LENGTH].rstrip()
         return reply
     except Exception:
-        LOG.warning("Groq suggested reply generation failed; posting review without a suggestion", exc_info=True)
+        LOG.warning("OpenAI suggested reply generation failed; posting review without a suggestion", exc_info=True)
         return None

@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch
 
 from common.review_sync import (
     decode_slack_text,
+    extract_suggested_reply,
     format_suggestion_section,
     has_human_reaction,
     post_new_reviews,
@@ -163,8 +164,11 @@ def _slack_with_parent(parent: dict) -> Mock:
     return slack
 
 
-def _parent(reactions=None) -> dict:
-    message = {"ts": "100.000", "user": "UBOT", "text": "review parent"}
+def _parent(reactions=None, suggestion="Thanks! We appreciate it.") -> dict:
+    # The posted review message is the only store of the suggestion; build the
+    # text exactly as the formatter would.
+    text = "review parent\n" + format_suggestion_section(suggestion, lambda value: str(value))
+    message = {"ts": "100.000", "user": "UBOT", "text": text}
     if reactions is not None:
         message["reactions"] = reactions
     return message
@@ -179,7 +183,7 @@ class ReactionApprovalTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def entry(self, **overrides) -> dict:
-        base = {"slack_ts": "100.000", "suggested_reply": "Thanks! We appreciate it."}
+        base = {"slack_ts": "100.000"}
         base.update(overrides)
         return base
 
@@ -236,9 +240,13 @@ class ReactionApprovalTests(unittest.TestCase):
 
         send_reply.assert_not_called()
 
-    def test_reaction_without_stored_suggestion_is_skipped(self):
-        state = {"reviews": {"r1": self.entry(suggested_reply=None)}}
-        slack = _slack_with_parent(_parent([{"name": "eyes", "count": 1, "users": ["U1"]}]))
+    def test_reaction_on_message_without_suggestion_is_skipped(self):
+        # A review that was posted while the AI was down has no 💡 section in
+        # its message, so a reaction on it must send nothing.
+        state = {"reviews": {"r1": self.entry()}}
+        slack = _slack_with_parent(
+            _parent([{"name": "eyes", "count": 1, "users": ["U1"]}], suggestion=None)
+        )
         send_reply = Mock()
 
         sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
@@ -266,7 +274,9 @@ class ReactionApprovalTests(unittest.TestCase):
 
 
 class SuggestionPostingTests(unittest.TestCase):
-    def test_suggestion_is_posted_and_stored(self):
+    def test_suggestion_is_posted_but_never_stored_in_state(self):
+        # State is committed to a PUBLIC repo: the suggestion must reach the
+        # Slack message (via the formatter) but never be persisted in state.
         slack = Mock()
         slack.post_review.return_value = "200.000"
         formatted = []
@@ -291,7 +301,7 @@ class SuggestionPostingTests(unittest.TestCase):
             )
 
         self.assertEqual(formatted, ["AI suggestion"])
-        self.assertEqual(state["reviews"]["g1"]["suggested_reply"], "AI suggestion")
+        self.assertNotIn("suggested_reply", state["reviews"]["g1"])
 
     def test_failed_suggestion_posts_review_without_it(self):
         slack = Mock()
@@ -321,6 +331,30 @@ class SuggestionPostingTests(unittest.TestCase):
         self.assertIn("React to this message (any emoji)", section)
         self.assertEqual(format_suggestion_section(None, escape), "")
         self.assertEqual(format_suggestion_section("", escape), "")
+
+    def test_extraction_round_trips_the_formatted_message(self):
+        # What the formatter writes (with Slack escaping) must come back out
+        # of the message byte-identical after extraction + decoding.
+        escape = lambda value: str(value).replace("&", "&amp;")
+        original = "Thanks & sorry — we'll fix it soon."
+        text = "🍎 review body\n" + format_suggestion_section(original, escape) + "-----------\n"
+
+        self.assertEqual(extract_suggested_reply({"text": text}), original)
+
+    def test_extraction_handles_multiline_and_linkified_suggestions(self):
+        # Slack auto-wraps bare URLs in the stored message text.
+        section = format_suggestion_section(
+            "Line one.\nSee <https://help.example.com|help.example.com> for steps.",
+            lambda value: str(value),
+        )
+        result = extract_suggested_reply({"text": "body\n" + section})
+
+        self.assertEqual(result, "Line one.\nSee help.example.com for steps.")
+
+    def test_extraction_returns_none_without_suggestion_block(self):
+        self.assertIsNone(extract_suggested_reply({"text": "plain review message"}))
+        self.assertIsNone(extract_suggested_reply({"text": None}))
+        self.assertIsNone(extract_suggested_reply(None))
 
 
 if __name__ == "__main__":

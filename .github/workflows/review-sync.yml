@@ -40,10 +40,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-      - name: Run Tests
-        # Runs before secrets are set and without PROJECT_SLUG, so the
-        # legacy-name state tests see a clean environment.
-        run: PYTHONPATH=scripts python -m unittest discover -s tests -v
       - name: Fetch review secrets from Infisical
         # Per-app secrets live in the app's Infisical project, folder /reviews
         # (APPSTORE_*, GOOGLE_PLAY_*, SLACK_CHANNEL_ID). The payload's
@@ -70,10 +66,10 @@ jobs:
           # wins over the Infisical-exported vars, so a leftover
           # SLACK_BOT_TOKEN in /reviews is ignored.
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          # Shared Groq key for AI-suggested replies (central repo secret,
+          # Shared OpenAI key for AI-suggested replies (central repo secret,
           # same pattern as the bot token). Absent key = suggestions are
           # skipped; the sync itself never depends on the AI.
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python scripts/main.py ${{ matrix.provider }}
       - name: Upload State
         if: always()

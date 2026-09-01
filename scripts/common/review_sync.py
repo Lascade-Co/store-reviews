@@ -21,15 +21,41 @@ def reply_hash(text: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
 
+# The Slack review message is the ONLY store of the suggested reply (state is
+# in a public repo, so unapproved AI text is deliberately not persisted there).
+# Extraction below parses the text between these two markers, so formatter and
+# extractor must always use the same constants.
+_SUGGESTION_PREFIX = "💡 *Suggested Reply:* "
+_SUGGESTION_HINT = (
+    "_React to this message (any emoji) to send the suggested reply, "
+    "or type your own reply in this thread._"
+)
+
+
 def format_suggestion_section(suggested_reply: str | None, escape) -> str:
     """Return the 💡 block appended to a review message, or an empty string."""
     if not suggested_reply:
         return ""
-    return (
-        f"\n💡 *Suggested Reply:* {escape(suggested_reply)}\n\n"
-        "_React to this message (any emoji) to send the suggested reply, "
-        "or type your own reply in this thread._\n"
-    )
+    return f"\n{_SUGGESTION_PREFIX}{escape(suggested_reply)}\n\n{_SUGGESTION_HINT}\n"
+
+
+def extract_suggested_reply(parent_message: object) -> str | None:
+    """Recover the suggested reply from the posted Slack review message.
+
+    Slack returns the message with our entity escaping intact and bare URLs
+    auto-wrapped in angle brackets; decode_slack_text reverses both.
+    """
+    if not isinstance(parent_message, dict):
+        return None
+    text = parent_message.get("text")
+    if not isinstance(text, str) or _SUGGESTION_PREFIX not in text:
+        return None
+    suggestion = text.split(_SUGGESTION_PREFIX, 1)[1]
+    suggestion = suggestion.split(_SUGGESTION_HINT, 1)[0]
+    # Drop the dashed footer if the hint line was somehow absent.
+    suggestion = suggestion.split("\n-----------", 1)[0]
+    suggestion = decode_slack_text(suggestion).strip()
+    return suggestion or None
 
 
 def has_human_reaction(parent_message: object, bot_user_id: str | None) -> bool:
@@ -146,8 +172,8 @@ def post_new_reviews(
     window as already seen and posts only reviews that appear afterwards.
 
     ``suggestion_generator(review)`` may return an AI-suggested reply; it is
-    shown in the Slack message and stored in state so a later reaction on the
-    message can approve sending it to the store. It must never raise.
+    shown in the Slack message (and later recovered from it when a reaction
+    approves sending it to the store). It must never raise.
     """
     new_reviews = select_new_reviews(
         reviews, state, initial_sync, initial_count, review_id_getter, stop_at_boundary
@@ -157,21 +183,20 @@ def post_new_reviews(
         for review in reversed(new_reviews):
             review_id = review_id_getter(review)
             suggested_reply = suggestion_generator(review) if suggestion_generator else None
+            # The suggestion lives ONLY in the Slack message (recovered from it
+            # at approval time); it is never persisted in this public repo.
             slack_ts = slack.post_review(formatter(review, suggested_reply))
-            extra_fields = {
-                reply_sent_key: (
-                    bool(reply_sent_getter(review)) if reply_sent_getter else False
-                )
-            }
-            if suggested_reply:
-                extra_fields["suggested_reply"] = suggested_reply
             upsert_review(
                 state,
                 review_id,
                 slack_ts=slack_ts,
                 last_reply_ts=None,
                 posted_at=now_iso(),
-                **extra_fields,
+                **{
+                    reply_sent_key: (
+                        bool(reply_sent_getter(review)) if reply_sent_getter else False
+                    )
+                },
             )
             mark_posted(state, review_id)
             save_state(provider, state)
@@ -268,7 +293,6 @@ def sync_slack_replies(
                 # the thread's typed replies own all updates (a developer can
                 # change the sent suggestion within the edit window just by
                 # typing in the thread, without removing the reaction).
-                suggested_reply = (entry.get("suggested_reply") or "").strip()
                 parent_message = next(
                     (
                         message
@@ -280,9 +304,13 @@ def sync_slack_replies(
                 if not entry.get("last_sent_reply_hash") and has_human_reaction(
                     parent_message, slack.bot_user_id
                 ):
+                    # The posted Slack message is the source of truth for the
+                    # suggestion (state lives in a public repo and must not
+                    # carry unapproved AI text).
+                    suggested_reply = extract_suggested_reply(parent_message)
                     if not suggested_reply:
                         LOG.info(
-                            "Reaction found for %s review %s but no suggested reply is stored; skipping",
+                            "Reaction found for %s review %s but its message has no suggested reply; skipping",
                             display_name,
                             review_id,
                         )
