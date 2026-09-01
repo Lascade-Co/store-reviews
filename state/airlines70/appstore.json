@@ -14,31 +14,36 @@
             "slack_ts": "1788252149.161219",
             "last_reply_ts": null,
             "posted_at": "2026-09-01T08:42:29.216239+00:00",
-            "apple_reply_sent": false
+            "apple_reply_sent": false,
+            "slack_thread_disabled": false
         },
         "00000183-b32a-6202-f94d-6ded00000000": {
             "slack_ts": "1788252150.835049",
             "last_reply_ts": null,
             "posted_at": "2026-09-01T08:42:30.888897+00:00",
-            "apple_reply_sent": false
+            "apple_reply_sent": false,
+            "slack_thread_disabled": false
         },
         "00000183-b32a-6203-4583-a8c200000000": {
             "slack_ts": "1788252152.742749",
             "last_reply_ts": null,
             "posted_at": "2026-09-01T08:42:32.800282+00:00",
-            "apple_reply_sent": false
+            "apple_reply_sent": false,
+            "slack_thread_disabled": false
         },
         "00000183-b32a-6203-473e-17ab00000000": {
             "slack_ts": "1788252154.492699",
             "last_reply_ts": null,
             "posted_at": "2026-09-01T08:42:34.545212+00:00",
-            "apple_reply_sent": false
+            "apple_reply_sent": false,
+            "slack_thread_disabled": false
         },
         "00000183-b32a-6203-56dd-c5f400000000": {
             "slack_ts": "1788252156.096619",
             "last_reply_ts": null,
             "posted_at": "2026-09-01T08:42:36.149591+00:00",
-            "apple_reply_sent": false
+            "apple_reply_sent": false,
+            "slack_thread_disabled": false
         }
     }
 }
