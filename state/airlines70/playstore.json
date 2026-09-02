@@ -1,0 +1,30 @@
+{
+    "state_version": 2,
+    "last_review_id": "fdf93f87-12da-4323-8ed2-75ddc5c89b59",
+    "last_checked": "2026-09-02T04:53:28.202700+00:00",
+    "posted_ids": [
+        "300c7948-cc19-445d-994a-59ad489fc65b",
+        "ed763c71-8f04-4cdb-ae73-52e193f7f433",
+        "fdf93f87-12da-4323-8ed2-75ddc5c89b59"
+    ],
+    "reviews": {
+        "ed763c71-8f04-4cdb-ae73-52e193f7f433": {
+            "slack_ts": "1788324803.659759",
+            "last_reply_ts": null,
+            "posted_at": "2026-09-02T04:53:23.689475+00:00",
+            "google_reply_sent": true
+        },
+        "300c7948-cc19-445d-994a-59ad489fc65b": {
+            "slack_ts": "1788324805.040349",
+            "last_reply_ts": null,
+            "posted_at": "2026-09-02T04:53:25.077667+00:00",
+            "google_reply_sent": true
+        },
+        "fdf93f87-12da-4323-8ed2-75ddc5c89b59": {
+            "slack_ts": "1788324808.168869",
+            "last_reply_ts": null,
+            "posted_at": "2026-09-02T04:53:28.200937+00:00",
+            "google_reply_sent": false
+        }
+    }
+}
