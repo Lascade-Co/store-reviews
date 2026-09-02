@@ -1,0 +1,16 @@
+{
+    "state_version": 2,
+    "last_review_id": "00000191-eb70-c103-3af7-304000000000",
+    "last_checked": "2026-09-02T10:21:16.752556+00:00",
+    "posted_ids": [
+        "00000191-eb70-c103-3af7-304000000000"
+    ],
+    "reviews": {
+        "00000191-eb70-c103-3af7-304000000000": {
+            "slack_ts": "1788344476.724719",
+            "last_reply_ts": null,
+            "posted_at": "2026-09-02T10:21:16.750587+00:00",
+            "apple_reply_sent": false
+        }
+    }
+}
