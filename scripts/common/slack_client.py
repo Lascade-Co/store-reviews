@@ -26,7 +26,17 @@ class SlackThreadNotFoundError(SlackApiError):
 
 class SlackClient:
     def __init__(self, token: str | None = None, channel_id: str | None = None):
-        self.token = token or os.environ["SLACK_BOT_TOKEN"]
+        # Token resolution: an app may override the shared bot with its own
+        # SLACK_BOT_TOKEN in its Infisical /reviews folder; when that key is
+        # absent/empty, fall back to the shared default bot token that the
+        # workflow provides from the central repo's GitHub secrets.
+        self.token = (
+            token
+            or os.environ.get("SLACK_BOT_TOKEN", "").strip()
+            or os.environ.get("SLACK_BOT_TOKEN_DEFAULT", "").strip()
+        )
+        if not self.token:
+            raise RuntimeError("No Slack bot token: set SLACK_BOT_TOKEN or SLACK_BOT_TOKEN_DEFAULT")
         self.channel_id = channel_id or os.environ["SLACK_CHANNEL_ID"]
         self.bot_user_id = None
 

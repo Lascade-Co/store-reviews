@@ -18,6 +18,25 @@ class Response:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+class SlackTokenResolutionTests(unittest.TestCase):
+    def test_infisical_token_wins_when_present(self):
+        env = {"SLACK_BOT_TOKEN": "xoxb-per-app", "SLACK_BOT_TOKEN_DEFAULT": "xoxb-shared", "SLACK_CHANNEL_ID": "C1"}
+        with patch.dict("os.environ", env, clear=False):
+            self.assertEqual(SlackClient().token, "xoxb-per-app")
+
+    def test_falls_back_to_default_when_absent_or_empty(self):
+        for per_app in ("", "   "):
+            env = {"SLACK_BOT_TOKEN": per_app, "SLACK_BOT_TOKEN_DEFAULT": "xoxb-shared", "SLACK_CHANNEL_ID": "C1"}
+            with patch.dict("os.environ", env, clear=False):
+                self.assertEqual(SlackClient().token, "xoxb-shared")
+
+    def test_no_token_anywhere_raises(self):
+        env = {"SLACK_BOT_TOKEN": "", "SLACK_BOT_TOKEN_DEFAULT": "", "SLACK_CHANNEL_ID": "C1"}
+        with patch.dict("os.environ", env, clear=False):
+            with self.assertRaises(RuntimeError):
+                SlackClient()
+
+
 class SlackClientTests(unittest.TestCase):
     def test_permission_error_is_actionable_type(self):
         client = SlackClient(token="test-token", channel_id="C123")

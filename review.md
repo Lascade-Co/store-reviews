@@ -77,9 +77,11 @@ requires no code change here — only the three steps below.
 | Google Play **service account JSON** with Play Console access to *view and reply to reviews* |-> Google Cloud Console + Play Console → Users and permissions |
 | The app's **Infisical project slug** |-> secrets.lascade.com → the app's project → Settings → Project slug |
 
+
 > You do **not** need the Slack bot token: one shared internal bot serves all apps, and its token
-> (`SLACK_BOT_TOKEN`) is configured once as a GitHub Actions secret on this central repo.
-> Onboarding only requires inviting that bot to your channel (Step 1).
+> is configured once as a GitHub Actions secret on this central repo. Onboarding only requires
+> inviting that bot to your channel (Step 1). (Optional: an app can use its own bot by adding a
+> non-empty `SLACK_BOT_TOKEN` to its `/reviews` folder — it then overrides the shared default.)
 
 An app can be iOS-only or Android-only — just skip the other platform's keys everywhere below;
 that platform's job will log "not configured" and exit cleanly.
@@ -101,10 +103,12 @@ In the app's Infisical project on `secrets.lascade.com`, create a folder named *
 | `APPSTORE_API_KEY_ID` | App Store Connect key ID | iOS |
 | `APPSTORE_API_PRIVATE_KEY` | Full `.p8` file contents (multiline is fine) | iOS |
 | `APPSTORE_ISSUER_ID` | Issuer UUID from the Integrations page | iOS |
-| `APPSTORE_APP_ID` | Numeric Apple app ID | iOS |
+| `APPSTORE_APPLE_ID` | Numeric Apple app ID | iOS |
 | `GOOGLE_PLAY_PACKAGE_NAME` | e.g. `com.lascade.myapp` | Android |
 | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Raw service-account JSON (**not** base64) | Android |
 | `SLACK_CHANNEL_ID` | The channel ID from Step 1 | both |
+
+<ins>For more detail on how to get each of these values, scroll down to [Getting the credentials — exact steps](#getting-the-credentials--exact-steps).</ins>
 
 > The workflow always reads the **Production** environment — put the keys there.
 
@@ -120,9 +124,9 @@ name: Trigger Review Sync
 on:
   workflow_dispatch:
   schedule:
-    # Twice daily at ~10:00 and ~17:00 IST (GitHub cron is UTC).
+    # Twice daily at ~05:00 and ~15:00 IST (GitHub cron is UTC).
     # Same cron for every app — the stagger step below spreads apps out.
-    - cron: "30 4,11 * * *"
+    - cron: "30 23,9 * * *"
 
 permissions:
   contents: read
@@ -165,7 +169,7 @@ jobs:
 Notes:
 
 - **Don't edit the cron — the schedule staggers itself.** Every app uses the same cron
-  (`30 4,11 * * *` = 10:00 & 17:00 IST), and the "Stagger start" step delays each app by a fixed
+  (`30 23,9 * * *` = 05:00 & 15:00 IST), and the "Stagger start" step delays each app by a fixed
   0–5-minute offset before dispatching. (Manual runs skip the delay and dispatch immediately.)
 
   **Why the stagger exists:** all apps share one internal Slack bot, and Slack rate-limits each
@@ -197,6 +201,57 @@ Done. From now on the schedule handles everything; no manual state setup is ever
 
 ---
 
+# Getting the credentials — exact steps
+
+[APPSTORE_APPLE_ID](https://appstoreconnect.apple.com)  
+`(Identifies the app on Apple's API — the numeric Apple ID like 6443538575, NOT the bundle ID)`
+
+1. Open App Store Connect (appstoreconnect.apple.com) → Apps → select the app.
+2. Left sidebar → App Information.
+3. Under General Information, copy the number in the Apple ID field.
+4. Shortcut for released apps: open the app's App Store page and copy the digits after "id" in the URL (.../app/myapp/id6443538575).
+
+
+[APPSTORE_API_KEY_ID](https://appstoreconnect.apple.com/access/integrations/api), [APPSTORE_ISSUER_ID](https://appstoreconnect.apple.com/access/integrations/api), [APPSTORE_API_PRIVATE_KEY](https://appstoreconnect.apple.com/access/integrations/api)  
+`(Lets the bot log in to Apple to read reviews and publish responses)`
+
+1. Open App Store Connect → Users and Access → Integrations → App Store Connect API → Team Keys → the plus (+) button.
+2. Name the key (e.g. review-bot), role App Manager, then Generate.
+3. Copy Issuer ID (shown at the top of the page) → APPSTORE_ISSUER_ID.
+4. Copy the key's Key ID → APPSTORE_API_KEY_ID.
+5. Download the .p8 file (Apple allows this only once — keep it safe). Paste its entire contents, including the BEGIN/END lines → APPSTORE_API_PRIVATE_KEY.
+
+
+[GOOGLE_PLAY_SERVICE_ACCOUNT_JSON](https://console.cloud.google.com)  
+`(Lets the bot log in to Google Play — the JSON key is the bot's identity; its permissions are granted separately in Play Console)`
+
+1. Open Google Cloud Console (console.cloud.google.com) → create/select a project.
+2. APIs & Services → Library → search "Google Play Android Developer API" → Enable.
+3. IAM & Admin → Service Accounts → Create service account → name it (e.g. review-monitor) → skip the role screens (no GCP roles needed) → Done.
+4. Open the created account → Keys → Add key → Create new key → JSON → a .json file downloads.
+5. Open Play Console (play.google.com/console) → Users and permissions → Invite new users → paste the service-account email (review-monitor@PROJECT.iam.gserviceaccount.com).
+6. Open the App permissions tab → Add app → select the app. Skipping this step is the #1 mistake — every API call then fails with 403 PERMISSION_DENIED.
+7. On that app tick BOTH permissions: "View app information (read-only)" and "Reply to reviews".
+8. Send invite. Google may take up to 24 hours to activate the access — if a run still fails with 403, wait and retry (making any trivial edit in Play Console and saving speeds it up).
+9. Paste the downloaded file's entire raw contents (not base64) → GOOGLE_PLAY_SERVICE_ACCOUNT_JSON.
+10. Permission changes later never require regenerating this JSON — Google checks permissions fresh on every call.
+
+
+[GOOGLE_PLAY_PACKAGE_NAME](https://play.google.com/console)  
+`(Identifies the app on Google's API — the package name like com.lascade.myapp)`
+
+1. Open Play Console → select the app — the package name is shown under the app name (or copy it from the app's Play Store URL after "id=").
+2. The app must belong to this Play account and have a production release (a wrong package also returns 403, not 404).
+
+
+[SLACK_CHANNEL_ID](https://app.slack.com)  
+`(Tells the bot which Slack channel receives this app's reviews)`
+
+1. In Slack, open the channel → click the channel name → View channel details.
+2. Scroll to the bottom of the About tab and copy the Channel ID (starts with C).
+
+---
+
 ## Day-to-day usage (for developers answering reviews)
 
 - New reviews appear as messages (🍎 App Store / 🤖 Play Store), each with its own thread and a
@@ -218,7 +273,7 @@ Done. From now on the schedule handles everything; no manual state setup is ever
 
 ## Schedule
 
-Twice daily per app — around **10:00 and 17:00 IST** (`cron: "30 4,11 * * *"` UTC, plus each
+Twice daily per app — around **05:00 and 15:00 IST** (`cron: "30 23,9 * * *"` UTC, plus each
 app's automatic 0–5-minute repo-specific stagger) — and manual runs anytime (manual runs skip the
 stagger). GitHub may delay cron by a few minutes. A review or reply posted between runs waits for
 the next run.

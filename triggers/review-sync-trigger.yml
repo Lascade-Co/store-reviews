@@ -8,9 +8,9 @@ name: Trigger Review Sync
 on:
   workflow_dispatch:
   schedule:
-    # ~10:00 & ~17:00 IST (cron is UTC). Same cron for every app — do not
+    # ~05:00 & ~15:00 IST (cron is UTC). Same cron for every app — do not
     # edit; the stagger step below spreads apps out automatically.
-    - cron: "30 4,11 * * *"
+    - cron: "30 23,9 * * *"
 
 permissions:
   contents: read

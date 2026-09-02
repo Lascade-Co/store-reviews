@@ -78,7 +78,7 @@ def fetch_reviews(token: str, stop_at_id: str | None = None, max_pages: int = PA
     Apple sorts by createdDate (immutable), so once ``stop_at_id`` appears in a
     page everything older is already known and paging can stop.
     """
-    url = f"{APPLE_API}/apps/{os.environ['APPSTORE_APP_ID']}/customerReviews"
+    url = f"{APPLE_API}/apps/{os.environ['APPSTORE_APPLE_ID']}/customerReviews"
     params = {"limit": 200, "sort": "-createdDate"}
     reviews: list[dict] = []
     pages = 0
@@ -179,7 +179,7 @@ REQUIRED_APPSTORE_ENV = (
     "APPSTORE_API_KEY_ID",
     "APPSTORE_ISSUER_ID",
     "APPSTORE_API_PRIVATE_KEY",
-    "APPSTORE_APP_ID",
+    "APPSTORE_APPLE_ID",
 )
 
 

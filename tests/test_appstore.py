@@ -47,7 +47,7 @@ class AppStoreSyncTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in result], ["3"])
 
-    @patch.dict(os.environ, {"APPSTORE_APP_ID": "123"})
+    @patch.dict(os.environ, {"APPSTORE_APPLE_ID": "123"})
     @patch("providers.appstore.request_with_retries")
     def test_fetch_reviews_follows_pagination(self, request):
         page1 = Mock()
@@ -63,7 +63,7 @@ class AppStoreSyncTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertEqual({item["id"] for item in result}, {"2", "1", "0"})
 
-    @patch.dict(os.environ, {"APPSTORE_APP_ID": "123"})
+    @patch.dict(os.environ, {"APPSTORE_APPLE_ID": "123"})
     @patch("providers.appstore.request_with_retries")
     def test_fetch_reviews_stops_at_boundary(self, request):
         page1 = Mock()

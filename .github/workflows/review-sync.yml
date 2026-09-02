@@ -46,8 +46,8 @@ jobs:
         # project_slug IS the Infisical project slug. export-type env injects
         # each key as a masked env var for the following steps. A platform
         # whose keys are absent from /reviews is skipped by that provider's
-        # guard. The shared SLACK_BOT_TOKEN is NOT per-app: it comes from this
-        # repo's GitHub secrets on the sync step below.
+        # guard. SLACK_BOT_TOKEN is optional per-app: a non-empty value here
+        # overrides the shared default bot provided by the sync step below.
         uses: Infisical/secrets-action@v1.0.15
         with:
           method: universal
@@ -61,11 +61,12 @@ jobs:
       - name: Sync Reviews and Slack Replies
         env:
           PROJECT_SLUG: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
-          # One internal bot serves every app, so its token lives once on this
-          # repo instead of in every app's Infisical folder. Step-level env
-          # wins over the Infisical-exported vars, so a leftover
-          # SLACK_BOT_TOKEN in /reviews is ignored.
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          # One internal bot serves every app by default, so its token lives
+          # once on this repo. An app can still override it by putting its own
+          # SLACK_BOT_TOKEN in its Infisical /reviews folder: the code prefers
+          # a non-empty Infisical SLACK_BOT_TOKEN and falls back to this
+          # default otherwise.
+          SLACK_BOT_TOKEN_DEFAULT: ${{ secrets.SLACK_BOT_TOKEN }}
           # Shared OpenAI key for AI-suggested replies (central repo secret,
           # same pattern as the bot token). Absent key = suggestions are
           # skipped; the sync itself never depends on the AI.
