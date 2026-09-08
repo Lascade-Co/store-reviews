@@ -153,9 +153,3 @@ def mark_posted(state: dict, review_id: str) -> None:
         ids.append(review_id)
 
 
-def save_if_changed(provider: str, original: dict, state: dict) -> bool:
-    """Save only when meaningful state changed; timestamps don't cause churn."""
-    if state == original:
-        return False
-    save_state(provider, state)
-    return True
