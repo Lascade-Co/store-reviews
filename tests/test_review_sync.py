@@ -1,16 +1,7 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from common.review_sync import (
-    decode_slack_text,
-    extract_suggested_reply,
-    format_suggestion_section,
-    has_human_reaction,
-    post_new_reviews,
-    reply_hash,
-    select_new_reviews,
-    sync_slack_replies,
-)
+from common.review_sync import collect_new_reviews, select_new_reviews
 
 
 def review(review_id: str) -> dict:
@@ -19,73 +10,6 @@ def review(review_id: str) -> dict:
 
 def _id(item: dict) -> str:
     return item["id"]
-
-
-class DecodeSlackTextTests(unittest.TestCase):
-    def test_entities_are_unescaped(self):
-        self.assertEqual(decode_slack_text("Thanks &amp; sorry"), "Thanks & sorry")
-        self.assertEqual(decode_slack_text("a &lt; b &gt; c"), "a < b > c")
-
-    def test_amp_is_unescaped_last_so_markup_is_not_reintroduced(self):
-        # "&amp;lt;" is a literal "&lt;" typed by the user, not a "<".
-        self.assertEqual(decode_slack_text("&amp;lt;"), "&lt;")
-
-    def test_labelled_link_keeps_label(self):
-        self.assertEqual(decode_slack_text("<https://x.com|x.com>"), "x.com")
-
-    def test_bare_link_keeps_url(self):
-        self.assertEqual(decode_slack_text("<https://x.com>"), "https://x.com")
-
-    def test_mentions_and_commands_are_unwrapped(self):
-        self.assertEqual(decode_slack_text("<@U1|alice>"), "alice")
-        self.assertEqual(decode_slack_text("hi <@U123>"), "hi U123")
-        self.assertEqual(decode_slack_text("<#C123|general>"), "general")
-        self.assertEqual(decode_slack_text("<!here>"), "here")
-
-    def test_plain_text_is_unchanged(self):
-        self.assertEqual(decode_slack_text("Just a normal reply."), "Just a normal reply.")
-
-
-class SyncRepliesDecodeTests(unittest.TestCase):
-    def setUp(self):
-        # sync_slack_replies persists state via save_state; mock it so tests
-        # never write real files into the repo's state/ folder.
-        patcher = patch("common.review_sync.save_state")
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def test_store_reply_and_hash_use_decoded_text(self):
-        slack = Mock()
-        slack.is_human_message.side_effect = lambda message: message.get("user") == "U1"
-        send_reply = Mock()
-        state = {"reviews": {"r1": {"slack_ts": "123.456"}}}
-        slack.replies.return_value = [
-            {"ts": "123.456", "user": "UBOT", "text": "review"},
-            {"ts": "123.500", "user": "U1", "text": "Thanks &amp; sorry, see <https://x.com|x.com>"},
-        ]
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_called_once_with("r1", "Thanks & sorry, see x.com")
-        self.assertEqual(
-            state["reviews"]["r1"]["last_sent_reply_hash"],
-            reply_hash("Thanks & sorry, see x.com"),
-        )
-
-    def test_reply_empty_after_decoding_is_skipped(self):
-        slack = Mock()
-        slack.is_human_message.side_effect = lambda message: message.get("user") == "U1"
-        send_reply = Mock()
-        state = {"reviews": {"r1": {"slack_ts": "123.456"}}}
-        slack.replies.return_value = [
-            {"ts": "123.456", "user": "UBOT", "text": "review"},
-            {"ts": "123.500", "user": "U1", "text": "<> "},
-        ]
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_not_called()
-        self.assertNotIn("last_sent_reply_hash", state["reviews"]["r1"])
 
 
 class BoundarySelectionTests(unittest.TestCase):
@@ -107,38 +31,6 @@ class BoundarySelectionTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in result], ["new"])
 
-    def test_initial_sync_baselines_whole_window_so_second_run_posts_only_new(self):
-        # Google (no boundary stop): initial sync posts the newest 5 but must
-        # mark EVERY fetched id as seen, otherwise the second run would treat
-        # the rest of the 7-day window as "new" and flood Slack with old reviews.
-        slack = Mock()
-        slack.post_review.side_effect = lambda text: f"ts-{text}"
-        state = {"last_review_id": None, "posted_ids": [], "reviews": {}}
-        window = [review(f"r{n}") for n in range(9, 0, -1)]  # r9 newest .. r1
-
-        with patch("common.review_sync.save_state"):
-            post_new_reviews(
-                "playstore", window, state, slack, initial_sync=True,
-                initial_count=5, review_id_getter=_id, formatter=lambda r, s=None: _id(r),
-                reply_sent_key="google_reply_sent",
-                stop_at_boundary=False, baseline_all_fetched=True,
-            )
-        self.assertEqual(slack.post_review.call_count, 5)  # newest 5 posted
-        self.assertEqual(set(state["posted_ids"]), {f"r{n}" for n in range(1, 10)})
-
-        # Second run: window now also holds new reviews r10 and r11.
-        slack.post_review.reset_mock()
-        window2 = [review(f"r{n}") for n in range(11, 0, -1)]
-        with patch("common.review_sync.save_state"):
-            post_new_reviews(
-                "playstore", window2, state, slack, initial_sync=False,
-                initial_count=5, review_id_getter=_id, formatter=lambda r, s=None: _id(r),
-                reply_sent_key="google_reply_sent",
-                stop_at_boundary=False, baseline_all_fetched=True,
-            )
-        posted = [call.args[0] for call in slack.post_review.call_args_list]
-        self.assertEqual(posted, ["r10", "r11"])  # old r1-r4 never posted
-
     def test_apple_scan_still_stops_at_boundary(self):
         reviews = [review("new"), review("boundary"), review("below")]
         state = {
@@ -154,232 +46,33 @@ class BoundarySelectionTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in result], ["new"])
 
+    def test_initial_sync_baselines_whole_window_so_second_run_posts_only_new(self):
+        # Google (no boundary stop): initial sync publishes the newest 5 but
+        # must mark EVERY fetched id as seen, otherwise the second run would
+        # treat the rest of the 7-day window as "new" and flood the dashboard.
+        state = {"last_review_id": None, "posted_ids": [], "reviews": {}}
+        window = [review(f"r{n}") for n in range(9, 0, -1)]  # r9 newest .. r1
 
-def _slack_with_parent(parent: dict) -> Mock:
-    slack = Mock()
-    slack.bot_user_id = "UBOT"
-    # Only U1 counts as human; the bot parent and bot messages are filtered.
-    slack.is_human_message.side_effect = lambda message: message.get("user") == "U1"
-    slack.replies.return_value = [parent]
-    return slack
-
-
-def _parent(reactions=None, suggestion="Thanks! We appreciate it.") -> dict:
-    # The posted review message is the only store of the suggestion; build the
-    # text exactly as the formatter would.
-    text = "review parent\n" + format_suggestion_section(suggestion, lambda value: str(value))
-    message = {"ts": "100.000", "user": "UBOT", "text": text}
-    if reactions is not None:
-        message["reactions"] = reactions
-    return message
-
-
-class ReactionApprovalTests(unittest.TestCase):
-    def setUp(self):
-        # sync_slack_replies persists state via save_state; mock it so tests
-        # never write real files into the repo's state/ folder.
-        patcher = patch("common.review_sync.save_state")
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def entry(self, **overrides) -> dict:
-        base = {"slack_ts": "100.000"}
-        base.update(overrides)
-        return base
-
-    def test_reaction_sends_suggested_reply_once(self):
-        state = {"reviews": {"r1": self.entry()}}
-        slack = _slack_with_parent(_parent([{"name": "joy", "count": 1, "users": ["U1"]}]))
-        send_reply = Mock()
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_called_once_with("r1", "Thanks! We appreciate it.")
-        entry = state["reviews"]["r1"]
-        self.assertEqual(entry["last_sent_reply_hash"], reply_hash("Thanks! We appreciate it."))
-        self.assertTrue(entry["google_reply_sent"])
-        self.assertTrue(entry["replied_at"])
-
-        # Second run with the reaction still present: already sent → no resend.
-        send_reply.reset_mock()
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-        send_reply.assert_not_called()
-
-    def test_typed_reply_beats_reaction(self):
-        state = {"reviews": {"r1": self.entry()}}
-        parent = _parent([{"name": "+1", "count": 1, "users": ["U1"]}])
-        slack = _slack_with_parent(parent)
-        slack.replies.return_value = [parent, {"ts": "101.000", "user": "U1", "text": "Custom answer"}]
-        send_reply = Mock()
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_called_once_with("r1", "Custom answer")
-
-    def test_reaction_ignored_after_any_reply_was_sent(self):
-        # The change-within-2-days flow: a typed reply owns the response;
-        # the lingering reaction must never resend the suggestion.
-        state = {
-            "reviews": {
-                "r1": self.entry(last_sent_reply_hash=reply_hash("Custom answer"), last_reply_ts="101.000")
-            }
-        }
-        slack = _slack_with_parent(_parent([{"name": "+1", "count": 2, "users": ["U1", "U2"]}]))
-        send_reply = Mock()
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_not_called()
-
-    def test_bot_only_reaction_is_ignored(self):
-        state = {"reviews": {"r1": self.entry()}}
-        slack = _slack_with_parent(_parent([{"name": "+1", "count": 1, "users": ["UBOT"]}]))
-        send_reply = Mock()
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_not_called()
-
-    def test_reaction_on_message_without_suggestion_is_skipped(self):
-        # A review that was posted while the AI was down has no 💡 section in
-        # its message, so a reaction on it must send nothing.
-        state = {"reviews": {"r1": self.entry()}}
-        slack = _slack_with_parent(
-            _parent([{"name": "eyes", "count": 1, "users": ["U1"]}], suggestion=None)
-        )
-        send_reply = Mock()
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_not_called()
-        self.assertNotIn("last_sent_reply_hash", state["reviews"]["r1"])
-
-    def test_no_reaction_and_no_reply_does_nothing(self):
-        state = {"reviews": {"r1": self.entry()}}
-        slack = _slack_with_parent(_parent())
-        send_reply = Mock()
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_not_called()
-        self.assertNotIn("last_sent_reply_hash", state["reviews"]["r1"])
-
-    def test_truncated_users_list_counts_as_human(self):
-        # Slack may truncate users while count stays accurate; the bot never
-        # reacts, so a higher count means a human reacted.
-        self.assertTrue(has_human_reaction({"reactions": [{"name": "joy", "count": 3, "users": []}]}, "UBOT"))
-        self.assertFalse(has_human_reaction({"reactions": [{"name": "joy", "count": 1, "users": ["UBOT"]}]}, "UBOT"))
-        self.assertFalse(has_human_reaction({"reactions": []}, "UBOT"))
-        self.assertFalse(has_human_reaction(None, "UBOT"))
-
-
-class SuggestionPostingTests(unittest.TestCase):
-    def test_suggestion_is_posted_but_never_stored_in_state(self):
-        # State is committed to a PUBLIC repo: the suggestion must reach the
-        # Slack message (via the formatter) but never be persisted in state.
-        slack = Mock()
-        slack.post_review.return_value = "200.000"
-        formatted = []
-
-        def formatter(review, suggested_reply):
-            formatted.append(suggested_reply)
-            return "message"
-
-        state = {"reviews": {}, "posted_ids": [], "last_review_id": None}
         with patch("common.review_sync.save_state"):
-            post_new_reviews(
-                "playstore",
-                [review("g1")],
-                state,
-                slack,
-                initial_sync=True,
-                initial_count=5,
-                review_id_getter=_id,
-                formatter=formatter,
+            entries = collect_new_reviews(
+                "playstore", window, state, initial_sync=True, initial_count=5,
+                review_id_getter=_id, normalizer=lambda r, s: {"review_id": r["id"]},
                 reply_sent_key="google_reply_sent",
-                suggestion_generator=lambda r: "AI suggestion",
+                stop_at_boundary=False, baseline_all_fetched=True,
             )
+        self.assertEqual(len(entries), 5)  # newest 5 published
+        self.assertEqual(set(state["posted_ids"]), {f"r{n}" for n in range(1, 10)})
 
-        self.assertEqual(formatted, ["AI suggestion"])
-        self.assertNotIn("suggested_reply", state["reviews"]["g1"])
-
-    def test_failed_suggestion_posts_review_without_it(self):
-        slack = Mock()
-        slack.post_review.return_value = "200.000"
-        state = {"reviews": {}, "posted_ids": [], "last_review_id": None}
+        # Second run: window now also holds new reviews r10 and r11.
+        window2 = [review(f"r{n}") for n in range(11, 0, -1)]
         with patch("common.review_sync.save_state"):
-            post_new_reviews(
-                "playstore",
-                [review("g1")],
-                state,
-                slack,
-                initial_sync=True,
-                initial_count=5,
-                review_id_getter=_id,
-                formatter=lambda r, s: "message",
+            entries2 = collect_new_reviews(
+                "playstore", window2, state, initial_sync=False, initial_count=5,
+                review_id_getter=_id, normalizer=lambda r, s: {"review_id": r["id"]},
                 reply_sent_key="google_reply_sent",
-                suggestion_generator=lambda r: None,
+                stop_at_boundary=False, baseline_all_fetched=True,
             )
-
-        self.assertNotIn("suggested_reply", state["reviews"]["g1"])
-        slack.post_review.assert_called_once()
-
-    def test_suggestion_section_formatting(self):
-        escape = lambda value: str(value).replace("&", "&amp;")
-        section = format_suggestion_section("Thanks & sorry", escape)
-        self.assertIn("*Suggested Reply:* Thanks &amp; sorry", section)
-        self.assertIn("React to this message (any emoji)", section)
-        # ASCII-only marker: Slack rewrites unicode emoji in stored text to
-        # colon shortcodes, so an emoji here would break extraction.
-        self.assertNotIn("💡", section)
-        self.assertEqual(format_suggestion_section(None, escape), "")
-        self.assertEqual(format_suggestion_section("", escape), "")
-
-    def test_extraction_handles_old_bulb_format_messages(self):
-        # Messages posted by the earlier format contained a 💡, which Slack
-        # stores as ":bulb:". The ASCII marker must still match them.
-        text = (
-            "review body\n"
-            ":bulb: *Suggested Reply:* Thank you for your wonderful review! "
-            "We appreciate your support.\n\n"
-            "_React to this message (any emoji) to send the suggested reply, "
-            "or type your own reply in this thread._\n-----------\n"
-        )
-        self.assertEqual(
-            extract_suggested_reply({"text": text}),
-            "Thank you for your wonderful review! We appreciate your support.",
-        )
-
-    def test_extraction_requires_hint_line(self):
-        # A review body that merely says "Suggested Reply:" must not be
-        # mistaken for a real suggestion section.
-        self.assertIsNone(
-            extract_suggested_reply({"text": "review: my *Suggested Reply:* was ignored\n-----------"})
-        )
-
-    def test_extraction_round_trips_the_formatted_message(self):
-        # What the formatter writes (with Slack escaping) must come back out
-        # of the message byte-identical after extraction + decoding.
-        escape = lambda value: str(value).replace("&", "&amp;")
-        original = "Thanks & sorry — we'll fix it soon."
-        text = "🍎 review body\n" + format_suggestion_section(original, escape) + "-----------\n"
-
-        self.assertEqual(extract_suggested_reply({"text": text}), original)
-
-    def test_extraction_handles_multiline_and_linkified_suggestions(self):
-        # Slack auto-wraps bare URLs in the stored message text.
-        section = format_suggestion_section(
-            "Line one.\nSee <https://help.example.com|help.example.com> for steps.",
-            lambda value: str(value),
-        )
-        result = extract_suggested_reply({"text": "body\n" + section})
-
-        self.assertEqual(result, "Line one.\nSee help.example.com for steps.")
-
-    def test_extraction_returns_none_without_suggestion_block(self):
-        self.assertIsNone(extract_suggested_reply({"text": "plain review message"}))
-        self.assertIsNone(extract_suggested_reply({"text": None}))
-        self.assertIsNone(extract_suggested_reply(None))
+        self.assertEqual([e["review_id"] for e in entries2], ["r10", "r11"])  # old r1-r4 never published
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+"""Minimal Slack client: the dashboard flow only posts run notifications."""
+
 import logging
 import os
 
@@ -20,10 +22,6 @@ class SlackPermissionError(SlackApiError):
     pass
 
 
-class SlackThreadNotFoundError(SlackApiError):
-    pass
-
-
 class SlackClient:
     def __init__(self, token: str | None = None, channel_id: str | None = None):
         # Token resolution: an app may override the shared bot with its own
@@ -38,25 +36,22 @@ class SlackClient:
         if not self.token:
             raise RuntimeError("No Slack bot token: set SLACK_BOT_TOKEN or SLACK_BOT_TOKEN_DEFAULT")
         self.channel_id = channel_id or os.environ["SLACK_CHANNEL_ID"]
-        self.bot_user_id = None
 
-    def _call(self, method: str, payload: dict, http_method: str = "POST") -> dict:
-        request_kwargs = {
-            "headers": {"Authorization": f"Bearer {self.token}", "Content-Type": "application/json; charset=utf-8"},
-            "timeout": 30,
-            "retry_network_errors": http_method == "GET" or method != "chat.postMessage",
-            "retry_server_errors": http_method == "GET" or method != "chat.postMessage",
-            "operation": f"Slack {method}",
-        }
-        if http_method == "GET":
-            request_kwargs["params"] = payload
-        else:
-            request_kwargs["json"] = payload
-
+    def _call(self, method: str, payload: dict) -> dict:
         response = request_with_retries(
-            http_method,
+            "POST",
             f"{SLACK_API}/{method}",
-            **request_kwargs,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            json=payload,
+            timeout=30,
+            # Notification posts are not retried on ambiguous failures to
+            # avoid duplicate messages (429s are still retried upstream).
+            retry_network_errors=False,
+            retry_server_errors=False,
+            operation=f"Slack {method}",
         )
         if response.status_code == 429:
             retry_after = response.headers.get("Retry-After")
@@ -76,68 +71,13 @@ class SlackClient:
             error = str(data.get("error", "unknown_error"))
             if error in {"not_allowed_token_type", "missing_scope", "no_permission"}:
                 raise SlackPermissionError(method, error)
-            if error == "thread_not_found":
-                raise SlackThreadNotFoundError(method, error)
-            retry_after = response.headers.get("Retry-After")
-            try:
-                retry_seconds = float(retry_after) if retry_after else None
-            except ValueError:
-                retry_seconds = None
-            if error in {"ratelimited", "rate_limited"}:
-                raise SlackApiError(method, "rate_limited", retry_seconds)
-            raise SlackApiError(method, error, retry_seconds)
+            raise SlackApiError(method, error)
         return data
 
-    def identify_bot(self) -> None:
-        try:
-            user_id = self._call("auth.test", {}).get("user_id")
-            if not user_id:
-                raise SlackApiError("auth.test", "missing_user_id")
-            self.bot_user_id = user_id
-        except SlackApiError as exc:
-            LOG.error("Could not identify Slack bot: %s", exc)
-            raise
-
     def post_review(self, text: str) -> str:
+        """Post one message to the app's channel; returns the message ts."""
         data = self._call("chat.postMessage", {"channel": self.channel_id, "text": text})
         ts = data.get("ts")
         if not ts:
             raise SlackApiError("chat.postMessage", "missing_ts")
         return ts
-
-    def replies(self, thread_ts: str) -> list[dict]:
-        messages = []
-        cursor = None
-        while True:
-            payload = {"channel": self.channel_id, "ts": thread_ts, "limit": 15}
-            if cursor:
-                payload["cursor"] = cursor
-            data = self._call("conversations.replies", payload, http_method="GET")
-            page = data.get("messages", [])
-            if not isinstance(page, list):
-                raise SlackApiError("conversations.replies", "invalid_messages_shape")
-            messages.extend(page)
-            previous_cursor = cursor
-            cursor = data.get("response_metadata", {}).get("next_cursor")
-            if not cursor:
-                return messages
-            if cursor == previous_cursor:
-                raise SlackApiError("conversations.replies", "repeated_pagination_cursor")
-
-    def is_bot_message(self, message: dict) -> bool:
-        return bool(
-            message.get("bot_id")
-            or (self.bot_user_id and message.get("user") == self.bot_user_id)
-        )
-
-    def is_human_message(self, message: dict) -> bool:
-        """Return whether a thread message is an ordinary human message."""
-        if self.is_bot_message(message):
-            return False
-        if message.get("type") not in {None, "message"}:
-            return False
-        # Slack system and workflow events use a subtype. Ordinary user
-        # messages do not, while bot_message is already covered above.
-        if message.get("subtype"):
-            return False
-        return bool(message.get("user"))

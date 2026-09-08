@@ -17,15 +17,14 @@ concurrency:
 
 jobs:
   sync:
-    name: Sync ${{ matrix.provider }}
+    # Web-dashboard mode: both providers run sequentially in ONE job so a
+    # single writer produces the app's pending-list file on R2 (no matrix
+    # race) and exactly one Slack notification is sent per run.
+    name: Sync and Publish
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        provider: [appstore, playstore]
     steps:
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -42,7 +41,6 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Fetch review secrets from Infisical
         # Per-app secrets live in the app's Infisical project, folder /reviews
-        # (APPSTORE_*, GOOGLE_PLAY_*, SLACK_CHANNEL_ID). The payload's
         # project_slug IS the Infisical project slug. export-type env injects
         # each key as a masked env var for the following steps. A platform
         # whose keys are absent from /reviews is skipped by that provider's
@@ -58,26 +56,36 @@ jobs:
           domain: ${{ secrets.INFISICAL_DOMAIN }}
           secret-path: /reviews
           export-type: env
-      - name: Sync Reviews and Slack Replies
+      - name: Sync Reviews and Publish Dashboard Data
         env:
           PROJECT_SLUG: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
           # One internal bot serves every app by default, so its token lives
           # once on this repo. An app can still override it by putting its own
           # SLACK_BOT_TOKEN in its Infisical /reviews folder: the code prefers
           # a non-empty Infisical SLACK_BOT_TOKEN and falls back to this
-          # default otherwise.
+          # default otherwise. In web mode Slack is notify-only (one message
+          # per run linking to the dashboard).
           SLACK_BOT_TOKEN_DEFAULT: ${{ secrets.SLACK_BOT_TOKEN }}
           # Shared OpenAI key for AI-suggested replies (central repo secret,
           # same pattern as the bot token). Absent key = suggestions are
           # skipped; the sync itself never depends on the AI.
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python scripts/main.py ${{ matrix.provider }}
+          # Cloudflare R2 (dashboard data file). All central-repo secrets;
+          # R2_DATA_PREFIX is the unguessable path segment, SITE_BASE_URL is
+          # the deployed dashboard used in the Slack notification link.
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_DATA_PREFIX: ${{ secrets.R2_DATA_PREFIX }}
+          SITE_BASE_URL: ${{ secrets.SITE_BASE_URL }}
+        run: python scripts/main.py
       - name: Upload State
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.client_payload.project_slug || inputs.project_slug }}-${{ matrix.provider }}-state
-          path: state/${{ github.event.client_payload.project_slug || inputs.project_slug }}/${{ matrix.provider }}.json
+          name: ${{ github.event.client_payload.project_slug || inputs.project_slug }}-state
+          path: state/${{ github.event.client_payload.project_slug || inputs.project_slug }}/
           if-no-files-found: warn
 
   commit-state:
@@ -95,18 +103,11 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
-      - name: Download App Store State
+      - name: Download State
         if: always()
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.PROJECT_SLUG }}-appstore-state
-          path: state/${{ env.PROJECT_SLUG }}
-        continue-on-error: true
-      - name: Download Google Play State
-        if: always()
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.PROJECT_SLUG }}-playstore-state
+          name: ${{ env.PROJECT_SLUG }}-state
           path: state/${{ env.PROJECT_SLUG }}
         continue-on-error: true
       - name: Commit Updated State

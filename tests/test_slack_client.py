@@ -38,31 +38,33 @@ class SlackTokenResolutionTests(unittest.TestCase):
 
 
 class SlackClientTests(unittest.TestCase):
+    def client(self) -> SlackClient:
+        return SlackClient(token="test-token", channel_id="C123")
+
+    def test_post_review_returns_message_ts(self):
+        response = Response(data={"ok": True, "ts": "111.222"})
+        with patch("common.slack_client.request_with_retries", return_value=response) as request:
+            ts = self.client().post_review("hello")
+
+        self.assertEqual(ts, "111.222")
+        args, kwargs = request.call_args
+        self.assertTrue(args[1].endswith("/chat.postMessage"))
+        self.assertEqual(kwargs["json"], {"channel": "C123", "text": "hello"})
+
     def test_permission_error_is_actionable_type(self):
-        client = SlackClient(token="test-token", channel_id="C123")
-        response = Response(data={"ok": False, "error": "not_allowed_token_type"})
+        response = Response(data={"ok": False, "error": "missing_scope"})
         with patch("common.slack_client.request_with_retries", return_value=response):
             with self.assertRaises(SlackPermissionError):
-                client.replies("123.456")
+                self.client().post_review("hello")
 
     def test_rate_limit_preserves_retry_after(self):
-        client = SlackClient(token="test-token", channel_id="C123")
-        response = Response(status_code=429, headers={"Retry-After": "60"})
+        response = Response(status_code=429, headers={"Retry-After": "12"})
         with patch("common.slack_client.request_with_retries", return_value=response):
-            with self.assertRaises(SlackApiError) as context:
-                client.replies("123.456")
-        self.assertEqual(context.exception.error, "rate_limited")
-        self.assertEqual(context.exception.retry_after, 60.0)
+            with self.assertRaises(SlackApiError) as ctx:
+                self.client().post_review("hello")
 
-    def test_thread_replies_use_get_query_parameters(self):
-        client = SlackClient(token="test-token", channel_id="C123")
-        response = Response(data={"ok": True, "messages": [], "response_metadata": {}})
-        with patch("common.slack_client.request_with_retries", return_value=response) as request:
-            client.replies("123.456")
-
-        self.assertEqual(request.call_args.args[0], "GET")
-        self.assertEqual(request.call_args.kwargs["params"]["channel"], "C123")
-        self.assertEqual(request.call_args.kwargs["params"]["ts"], "123.456")
+        self.assertEqual(ctx.exception.error, "rate_limited")
+        self.assertEqual(ctx.exception.retry_after, 12.0)
 
 
 if __name__ == "__main__":

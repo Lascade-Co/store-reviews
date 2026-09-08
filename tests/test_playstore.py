@@ -5,10 +5,9 @@ from providers.playstore import (
     _has_developer_reply,
     _prepare_reply,
     _review_id,
-    _split_title_body,
     _timestamp_value,
     fetch_reviews,
-    format_review,
+    normalize_entry,
     reply_to_review,
 )
 
@@ -20,7 +19,7 @@ def review(review_id="play-1"):
         "comments": [
             {
                 "userComment": {
-                    "text": "Great title\tExcellent app",
+                    "text": "Excellent app",
                     "starRating": 5,
                     "reviewerLanguage": "en-IN",
                     "appVersionName": "2.3.1",
@@ -32,50 +31,42 @@ def review(review_id="play-1"):
 
 
 class PlayStoreTests(unittest.TestCase):
-    def setUp(self):
-        # The reply-sync tests exercise sync_slack_replies, which persists
-        # state via save_state; mock it so tests never write real files into
-        # the repo's state/ folder (PROJECT_SLUG is unset during tests, which
-        # would otherwise create the legacy state/playstore_reviews.json).
-        patcher = patch("common.review_sync.save_state")
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def test_documented_title_body_separator_is_supported(self):
-        self.assertEqual(_split_title_body("Title\tBody"), ("Title", "Body"))
-        self.assertIn("Google Play", format_review(review()))
-
     def test_timestamp_shape_is_supported(self):
         self.assertEqual(_timestamp_value({"seconds": "10", "nanos": 500000000}), 10.5)
 
-    def test_optional_fields_and_empty_review_are_safe(self):
+    def test_review_id_is_taken_directly_from_api_resource(self):
+        self.assertEqual(_review_id(review("actual-api-id")), "actual-api-id")
+
+    def test_developer_comment_is_detected(self):
+        review_with_reply = review()
+        review_with_reply["comments"].append(
+            {"developerComment": {"text": "Already answered in the console"}}
+        )
+        self.assertTrue(_has_developer_reply(review_with_reply))
+        self.assertFalse(_has_developer_reply(review()))
+
+    def test_normalize_entry_shapes_dashboard_fields(self):
+        entry = normalize_entry(review("g1"), "¡Gracias!")
+
+        self.assertEqual(entry["platform"], "playstore")
+        self.assertEqual(entry["review_id"], "g1")
+        self.assertIsNone(entry["title"])  # Google Play has no separate title
+        self.assertEqual(entry["body"], "Excellent app")
+        self.assertEqual(entry["reviewer"], "A reviewer")
+        self.assertEqual(entry["suggested_reply"], "¡Gracias!")
+        self.assertTrue(entry["reviewed_at"].startswith("2023-11-14"))
+
+    def test_normalize_entry_handles_missing_optional_fields(self):
         empty_review = {
             "reviewId": "play-empty",
             "comments": [{"userComment": {"text": None, "starRating": None}}],
         }
-        message = format_review(empty_review)
+        entry = normalize_entry(empty_review, None)
 
-        # Google Play has no separate title field, so the format shows no
-        # Title line (unlike the App Store format).
-        self.assertNotIn("*Title:*", message)
-        self.assertIn("No review text provided.", message)
-        self.assertIn("0/5", message)
-        self.assertIn("Anonymous", message)
-        self.assertIn("Unknown", message)
-
-    def test_developer_comment_is_not_used_as_review_text(self):
-        review_with_reply = review()
-        review_with_reply["comments"].append(
-            {"developerComment": {"text": "Private developer response"}}
-        )
-
-        message = format_review(review_with_reply)
-
-        self.assertTrue(_has_developer_reply(review_with_reply))
-        self.assertNotIn("Private developer response", message)
-
-    def test_review_id_is_taken_directly_from_api_resource(self):
-        self.assertEqual(_review_id(review("actual-api-id")), "actual-api-id")
+        self.assertEqual(entry["body"], "No review text provided.")
+        self.assertEqual(entry["rating"], 0)
+        self.assertEqual(entry["reviewer"], "Anonymous")
+        self.assertIsNone(entry["suggested_reply"])
 
     def test_reply_is_truncated_to_documented_limit(self):
         prepared = _prepare_reply("x" * 400, "play-1")
@@ -137,6 +128,22 @@ class PlayStoreTests(unittest.TestCase):
 
     @patch("providers.playstore._package_name", return_value="com.example.app")
     @patch("providers.playstore.request_with_retries")
+    def test_reply_uses_official_endpoint_and_payload(self, request, package_name):
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {"result": {"replyText": "Thanks"}}
+        request.return_value = response
+        credentials = Mock(token="access-token")
+
+        reply_to_review(credentials, "play-1", "Thanks")
+
+        request.assert_called_once()
+        args, kwargs = request.call_args
+        self.assertEqual(args[0], "POST")
+        self.assertTrue(args[1].endswith("/applications/com.example.app/reviews/play-1:reply"))
+        self.assertEqual(kwargs["json"], {"replyText": "Thanks"})
+
+    @patch("providers.playstore._package_name", return_value="com.example.app")
+    @patch("providers.playstore.request_with_retries")
     def test_normalized_reply_text_is_accepted(self, request, package_name):
         # Google may strip HTML-ish content or trim the applied reply; the reply
         # was still published, so a differing replyText must not raise.
@@ -156,113 +163,6 @@ class PlayStoreTests(unittest.TestCase):
 
             with self.assertRaises(RuntimeError):
                 reply_to_review(Mock(token="access-token"), "play-1", "Thanks")
-
-    @patch("providers.playstore._package_name", return_value="com.example.app")
-    @patch("providers.playstore.request_with_retries")
-    def test_reply_uses_official_endpoint_and_payload(self, request, package_name):
-        response = Mock()
-        response.json.return_value = {"result": {"replyText": "Thanks"}}
-        request.return_value = response
-        credentials = Mock(token="access-token")
-
-        reply_to_review(credentials, "play-1", "Thanks")
-
-        request.assert_called_once()
-        args, kwargs = request.call_args
-        self.assertEqual(args[0], "POST")
-        self.assertTrue(args[1].endswith("/applications/com.example.app/reviews/play-1:reply"))
-        self.assertEqual(kwargs["json"], {"replyText": "Thanks"})
-
-    def test_no_new_reply_does_not_call_provider(self):
-        from common.review_sync import sync_slack_replies
-
-        slack = Mock()
-        slack.is_human_message.return_value = False
-        send_reply = Mock()
-        state = {
-            "reviews": {
-                "play-1": {
-                    "slack_ts": "123.456",
-                    "last_reply_ts": "123.500",
-                    "google_reply_sent": True,
-                }
-            }
-        }
-        slack.replies.return_value = [
-            {"ts": "123.456", "user": "UBOT", "text": "review"},
-        ]
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        slack.replies.assert_called_once_with("123.456")
-        send_reply.assert_not_called()
-
-    def test_second_reply_replaces_first_and_third_reply_is_latest(self):
-        from common.review_sync import sync_slack_replies
-
-        slack = Mock()
-        slack.is_human_message.side_effect = lambda message: message.get("user") == "U1"
-        send_reply = Mock()
-        state = {"reviews": {"play-1": {"slack_ts": "123.456"}}}
-
-        slack.replies.return_value = [
-            {"ts": "123.456", "user": "UBOT", "text": "review"},
-            {"ts": "123.500", "user": "U1", "text": "Reply 1"},
-            {"ts": "123.600", "user": "U1", "text": "Reply 2"},
-            {"ts": "123.700", "user": "U1", "text": "Reply 3"},
-        ]
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_called_once_with("play-1", "Reply 3")
-        self.assertEqual(state["reviews"]["play-1"]["last_reply_ts"], "123.700")
-        self.assertTrue(state["reviews"]["play-1"]["last_sent_reply_hash"])
-
-    def test_identical_newest_reply_is_skipped_without_provider_call(self):
-        from common.review_sync import reply_hash, sync_slack_replies
-
-        slack = Mock()
-        slack.is_human_message.side_effect = lambda message: message.get("user") == "U1"
-        send_reply = Mock()
-        state = {
-            "reviews": {
-                "play-1": {
-                    "slack_ts": "123.456",
-                    "last_reply_ts": "123.500",
-                    "last_sent_reply_hash": reply_hash("Already sent"),
-                    "google_reply_sent": True,
-                }
-            }
-        }
-        slack.replies.return_value = [
-            {"ts": "123.456", "user": "UBOT", "text": "review"},
-            {"ts": "123.500", "user": "U1", "text": "older"},
-            {"ts": "123.600", "user": "U1", "text": "Already sent"},
-        ]
-
-        sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        send_reply.assert_not_called()
-        self.assertEqual(state["reviews"]["play-1"]["last_reply_ts"], "123.600")
-
-    def test_failed_provider_update_does_not_change_state(self):
-        from common.review_sync import sync_slack_replies
-
-        slack = Mock()
-        slack.is_human_message.side_effect = lambda message: message.get("user") == "U1"
-        send_reply = Mock(side_effect=RuntimeError("provider unavailable"))
-        state = {"reviews": {"play-1": {"slack_ts": "123.456"}}}
-        slack.replies.return_value = [
-            {"ts": "123.456", "user": "UBOT", "text": "review"},
-            {"ts": "123.600", "user": "U1", "text": "Reply"},
-        ]
-
-        with self.assertRaises(RuntimeError):
-            sync_slack_replies("playstore", state, slack, "google_reply_sent", send_reply)
-
-        self.assertNotIn("last_reply_ts", state["reviews"]["play-1"])
-        self.assertNotIn("last_sent_reply_hash", state["reviews"]["play-1"])
-        self.assertNotIn("google_reply_sent", state["reviews"]["play-1"])
 
 
 if __name__ == "__main__":

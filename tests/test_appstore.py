@@ -2,9 +2,8 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from providers.appstore import INITIAL_SYNC_COUNT, _review_id, fetch_reviews
-from common.review_sync import reply_candidates, select_new_reviews
-from common.slack_client import SlackClient
+from providers.appstore import INITIAL_SYNC_COUNT, _review_id, fetch_reviews, normalize_entry
+from common.review_sync import select_new_reviews
 
 
 def review(review_id: str) -> dict:
@@ -47,6 +46,27 @@ class AppStoreSyncTests(unittest.TestCase):
 
         self.assertEqual([item["id"] for item in result], ["3"])
 
+    def test_normalize_entry_shapes_dashboard_fields(self):
+        entry = normalize_entry(
+            {
+                "id": "r1",
+                "attributes": {
+                    "rating": 2,
+                    "title": " Bad price ",
+                    "body": "Too costly",
+                    "reviewerNickname": "Sam",
+                    "territory": "IND",
+                    "createdDate": "2026-09-01T00:00:00Z",
+                },
+            },
+            "Sorry to hear!",
+        )
+        self.assertEqual(entry["platform"], "appstore")
+        self.assertEqual(entry["review_id"], "r1")
+        self.assertEqual(entry["title"], "Bad price")
+        self.assertEqual(entry["suggested_reply"], "Sorry to hear!")
+        self.assertFalse(entry["replied"])
+
     @patch.dict(os.environ, {"APPSTORE_APPLE_ID": "123"})
     @patch("providers.appstore.request_with_retries")
     def test_fetch_reviews_follows_pagination(self, request):
@@ -75,33 +95,6 @@ class AppStoreSyncTests(unittest.TestCase):
 
         self.assertEqual(request.call_count, 1)  # stopped without fetching page 2
         self.assertEqual({item["id"] for item in result}, {"5", "4"})
-
-    def test_reply_candidates_ignore_bot_and_duplicate_messages(self):
-        client = SlackClient(token="test-token", channel_id="C123")
-        client.bot_user_id = "UBOT"
-        messages = [
-            {"ts": "1.0", "user": "UBOT", "text": "parent"},
-            {"ts": "2.0", "user": "U1", "text": "reply"},
-            {"ts": "2.0", "user": "U1", "text": "duplicate"},
-            {"ts": "3.0", "bot_id": "BOTHER", "text": "bot"},
-        ]
-
-        result = reply_candidates(messages, {"last_reply_ts": "1.5"}, client)
-
-        self.assertEqual([message["ts"] for message in result], ["2.0"])
-
-    def test_reply_candidates_ignore_system_messages(self):
-        client = SlackClient(token="test-token", channel_id="C123")
-        client.bot_user_id = "UBOT"
-        messages = [
-            {"ts": "2.0", "user": "U1", "text": "human"},
-            {"ts": "3.0", "user": "U1", "subtype": "message_changed", "text": "edited"},
-            {"ts": "4.0", "user": "U1", "subtype": "thread_broadcast", "text": "broadcast"},
-        ]
-
-        result = reply_candidates(messages, {"last_reply_ts": "1.0"}, client)
-
-        self.assertEqual([message["ts"] for message in result], ["2.0"])
 
 
 if __name__ == "__main__":

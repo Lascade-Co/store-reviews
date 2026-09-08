@@ -1,6 +1,10 @@
-"""Google Play review synchronization provider."""
+"""Google Play review provider (web-dashboard mode).
 
-import copy
+Fetches customer reviews, records new ones in state, and returns normalized
+entries for the app's pending-list data file. Replies are sent by the reply
+workflow via reply_to_review().
+"""
+
 import json
 import logging
 import os
@@ -10,10 +14,9 @@ from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
 from common.ai_reply import generate_suggested_reply
-from common.review_sync import format_suggestion_section, post_new_reviews, sync_slack_replies
-from common.slack_client import SlackClient
-from common.state_manager import load_state, save_if_changed
-from common.utils import IST, current_ist, request_with_retries
+from common.review_sync import collect_new_reviews
+from common.state_manager import load_state, now_iso, save_state
+from common.utils import request_with_retries
 
 
 LOG = logging.getLogger(__name__)
@@ -213,17 +216,6 @@ def fetch_reviews(
     return valid_reviews
 
 
-def _split_title_body(text: str) -> tuple[str, str]:
-    if "\t" in text:
-        title, body = text.split("\t", 1)
-        return title.strip() or "No Title", body.strip() or "No review text provided."
-    return "No Title", text.strip() or "No review text provided."
-
-
-def _escape_slack(value: object) -> str:
-    return str(value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
 def _display_value(value: object, default: str) -> str:
     if value is None or not str(value).strip():
         return default
@@ -234,50 +226,6 @@ def _rating_value(value: object) -> int:
     if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 5:
         return value
     return 0
-
-
-def _review_date(comment: dict) -> str:
-    value = _timestamp_value(comment.get("lastModified"))
-    if not value:
-        return "Unknown"
-    return datetime.fromtimestamp(value, tz=timezone.utc).astimezone(IST).strftime("%d %b %Y, %I:%M %p IST")
-
-
-def format_review(review: dict, suggested_reply: str | None = None) -> str:
-    comment = _user_comment(review)
-    title, body = _split_title_body(_display_value(comment.get("text"), ""))
-    rating = _rating_value(comment.get("starRating"))
-    suggestion_section = format_suggestion_section(suggested_reply, _escape_slack)
-    return f"""
-🤖 *New Playstore Review*
-
-*Rating:* {rating}/5
-*Review:* {_escape_slack(body)}
-
-*Reviewer:* {_escape_slack(_display_value(review.get("authorName"), "Anonymous"))}
-*Language:* {_escape_slack(_display_value(comment.get("reviewerLanguage"), "Unknown"))}
-*Reviewed:* {_escape_slack(_review_date(comment))}
-*Platform:* Google Play
-*Review ID:* {_escape_slack(review["reviewId"])}
-*Detected:* {current_ist()}
-{suggestion_section}-----------
-"""
-
-
-def _review_id(review: dict) -> str:
-    return review["reviewId"]
-
-
-def _suggest_reply(review: dict) -> str | None:
-    """Ask the AI for a suggested response to this review (None on any failure)."""
-    comment = _user_comment(review)
-    title, body = _split_title_body(_display_value(comment.get("text"), ""))
-    return generate_suggested_reply(
-        "Google Play",
-        _rating_value(comment.get("starRating")),
-        title,
-        body,
-    )
 
 
 def _prepare_reply(text: str, review_id: str) -> str:
@@ -340,110 +288,91 @@ def reply_to_review(credentials: service_account.Credentials, review_id: str, te
         )
 
 
+def _review_id(review: dict) -> str:
+    return review["reviewId"]
+
+
+def _suggest_reply(review: dict) -> str | None:
+    """Ask the AI for a suggested response to this review (None on any failure)."""
+    comment = _user_comment(review)
+    return generate_suggested_reply(
+        "Google Play",
+        _rating_value(comment.get("starRating")),
+        "No Title",  # Google Play has no separate title field
+        _display_value(comment.get("text"), "No review text provided."),
+    )
+
+
+def normalize_entry(review: dict, suggested_reply: str | None) -> dict:
+    """Convert a Google Play review into the dashboard data-file entry."""
+    comment = _user_comment(review)
+    text = _display_value(comment.get("text"), "No review text provided.")
+    modified = _timestamp_value(comment.get("lastModified"))
+    reviewed_at = (
+        datetime.fromtimestamp(modified, tz=timezone.utc).isoformat() if modified else None
+    )
+    return {
+        "platform": "playstore",
+        "review_id": review["reviewId"],
+        "rating": _rating_value(comment.get("starRating")),
+        "title": None,  # Google Play has no separate title field
+        "body": text.replace("\t", " — "),
+        "reviewer": _display_value(review.get("authorName"), "Anonymous"),
+        "territory_or_language": _display_value(comment.get("reviewerLanguage"), "Unknown"),
+        "reviewed_at": reviewed_at,
+        "detected_at": now_iso(),
+        "suggested_reply": suggested_reply,
+        "replied": False,
+        "reply_text": None,
+    }
+
+
 REQUIRED_PLAYSTORE_ENV = (
     "GOOGLE_PLAY_PACKAGE_NAME",
     "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON",
 )
 
 
-def run_playstore() -> None:
-    """Run one Google Play sync: fetch reviews, post new ones, apply Slack replies."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-    # Provider guard: an iOS-only app has no GOOGLE_PLAY_* keys in its
-    # Infisical /reviews folder, so this job exits successfully without work.
+def run_playstore_collect() -> tuple[list[dict], dict]:
+    """Fetch + record new reviews in state, return dashboard entries + state."""
     if not all(os.environ.get(name) for name in REQUIRED_PLAYSTORE_ENV):
         LOG.info("Google Play not configured for this app; skipping")
-        return
+        return [], load_state("playstore")
 
     LOG.info("Generating Google Play OAuth access token")
     credentials = _credentials()
     state = load_state("playstore")
-    original_state = copy.deepcopy(state)
-    # No last_review_id recorded yet means this app has never synced before.
     initial_sync = not bool(state.get("last_review_id"))
-    slack = SlackClient()
 
-    def flag_existing_developer_replies(reviews: list[dict]) -> bool:
-        # Operational visibility: mark reviews that already carry a developer
-        # reply (made outside this system, e.g. in the Play Console). The flag
-        # is diagnostic only — it never blocks a newer Slack reply.
-        changed = False
-        for review in reviews:
-            review_id = _review_id(review)
-            if _has_developer_reply(review):
-                entry = state.get("reviews", {}).get(review_id)
-                if entry is not None and not entry.get("google_reply_sent"):
-                    entry["google_reply_sent"] = True
-                    changed = True
-                    LOG.warning(
-                        "provider=Google Play review_id=%s existing developerComment detected; "
-                        "automatic overwrite disabled",
-                        review_id,
-                    )
-        return changed
-
-    def post_to_slack(reviews: list[dict]) -> None:
-        # Shared posting logic (same call the App Store provider makes):
-        # dedups against posted_ids, posts oldest-first, saves each Slack
-        # thread mapping, then advances last_review_id.
-        post_new_reviews(
-            "playstore",
-            reviews,
-            state,
-            slack,
-            initial_sync,
-            INITIAL_SYNC_COUNT,
-            _review_id,
-            format_review,
-            "google_reply_sent",
-            _has_developer_reply,
-            # Google orders by lastModified, which edits can change — a
-            # boundary early-stop could hide a genuinely-new review sorted
-            # below an edited one, so scan the whole fetched window instead.
-            stop_at_boundary=False,
-            # On the initial sync, mark every fetched id as seen (only the
-            # newest few are posted); without this, the next run would treat
-            # the rest of the 7-day window as "new" and flood Slack with them.
-            baseline_all_fetched=True,
-            suggestion_generator=_suggest_reply,
-        )
-
-    # Fetch the whole 7-day window on every run — including the initial sync,
-    # where the full window is needed to baseline every visible review id
-    # (only the newest few are posted). Google's lastModified ordering is
-    # mutable, so there is no boundary early-stop (see fetch_reviews).
     LOG.info("Fetching Google Play reviews%s", " (initial sync)" if initial_sync else "")
-    reviews = fetch_reviews(credentials)
+    reviews = fetch_reviews(credentials, max_pages=1) if initial_sync else fetch_reviews(credentials)
     LOG.info("Fetched %d Google Play review(s)", len(reviews))
-    state_changed = flag_existing_developer_replies(reviews)
-    if reviews:
-        post_to_slack(reviews)
-    if state_changed:
-        save_if_changed("playstore", original_state, state)
 
-    if initial_sync:
-        # Replies are NOT polled on the first run, so pre-existing Slack
-        # messages can never be mistaken for store replies.
-        if reviews:
-            LOG.info("Google Play initial sync complete; saved %d review mapping(s)", len(state.get("reviews", {})))
-        else:
-            LOG.info("Google Play initial sync found no reviews")
-        return
+    # Reviews already answered at the store (e.g. via the Play Console) carry a
+    # developerComment; flag them so they never appear as pending.
+    flags_changed = False
+    for review in reviews:
+        review_id = _review_id(review)
+        entry = state.get("reviews", {}).get(review_id)
+        if entry is not None and _has_developer_reply(review) and not entry.get("google_reply_sent"):
+            entry["google_reply_sent"] = True
+            flags_changed = True
+    if flags_changed:
+        save_state("playstore", state)
 
-    # Incremental run continues: poll the active Slack threads and forward
-    # the newest human reply to the store.
-    sync_slack_replies(
+    entries = collect_new_reviews(
         "playstore",
+        reviews,
         state,
-        slack,
+        initial_sync,
+        INITIAL_SYNC_COUNT,
+        _review_id,
+        normalize_entry,
         "google_reply_sent",
-        lambda review_id, text: reply_to_review(credentials, review_id, text),
-        "Google Play",
-    )
-
-    if state != original_state:
-        save_if_changed("playstore", original_state, state)
-        LOG.info("Google Play state updated")
-    else:
-        LOG.info("No Google Play state changes")
+        reply_sent_getter=_has_developer_reply,
+        # lastModified order is mutable; never stop at the boundary (see fetch_reviews).
+        stop_at_boundary=False,
+        baseline_all_fetched=True,
+        suggestion_generator=_suggest_reply,
+    ) if reviews else []
+    return entries, state
