@@ -8,7 +8,7 @@ workflow via reply_to_review().
 import logging
 import os
 
-from common.ai_reply import generate_suggested_reply
+from common.ai_reply import generate_suggested_replies
 from common.jwt_generator import generate_token
 from common.review_sync import collect_new_reviews
 from common.state_manager import load_state, now_iso
@@ -128,15 +128,19 @@ def _review_id(review: dict) -> str:
     return review["id"]
 
 
-def _suggest_reply(review: dict) -> str | None:
-    """Ask the AI for a suggested response to this review (None on any failure)."""
-    attr = review.get("attributes", {})
-    return generate_suggested_reply(
-        "Apple App Store",
-        attr.get("rating", 0),
-        str(attr.get("title") or "").strip() or "No Title",
-        str(attr.get("body") or "").strip() or "No review text provided.",
-    )
+def _suggest_batch(new_reviews: list[dict]) -> dict[str, str]:
+    """One Codex call for all new App Store reviews → {review_id: reply}."""
+    items = [
+        {
+            "id": review["id"],
+            "platform": "Apple App Store",
+            "rating": review.get("attributes", {}).get("rating", 0),
+            "title": str(review.get("attributes", {}).get("title") or "").strip() or "No Title",
+            "body": str(review.get("attributes", {}).get("body") or "").strip() or "No review text provided.",
+        }
+        for review in new_reviews
+    ]
+    return generate_suggested_replies(items)
 
 
 def normalize_entry(review: dict, suggested_reply: str | None) -> dict:
@@ -197,6 +201,6 @@ def run_appstore_collect() -> tuple[list[dict], dict]:
         # createdDate order is immutable, so stopping the scan at the
         # last_review_id boundary is safe for Apple (unlike Google).
         stop_at_boundary=True,
-        suggestion_generator=_suggest_reply,
+        suggestion_generator=_suggest_batch,
     ) if reviews else []
     return entries, state

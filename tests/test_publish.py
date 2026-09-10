@@ -99,7 +99,8 @@ class CollectNewReviewsTests(unittest.TestCase):
                 review_id_getter=lambda r: r["id"],
                 normalizer=lambda r, s: {"platform": "appstore", "review_id": r["id"], "suggested_reply": s},
                 reply_sent_key="apple_reply_sent",
-                suggestion_generator=lambda r: "AI!",
+                # Batch generator: one call with all new reviews -> {id: reply}.
+                suggestion_generator=lambda new: {r["id"]: "AI!" for r in new},
             )
 
         self.assertEqual(len(entries), 5)  # newest 5 on initial sync

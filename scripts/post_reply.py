@@ -8,7 +8,6 @@ pending-list file is rebuilt (the replied entry drops out) and re-uploaded.
 
 import logging
 import os
-import sys
 
 from common.publish import build_list, download_current, upload
 from common.review_sync import reply_hash

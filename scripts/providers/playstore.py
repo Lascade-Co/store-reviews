@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
-from common.ai_reply import generate_suggested_reply
+from common.ai_reply import generate_suggested_replies
 from common.review_sync import collect_new_reviews
 from common.state_manager import load_state, now_iso, save_state
 from common.utils import request_with_retries
@@ -292,15 +292,21 @@ def _review_id(review: dict) -> str:
     return review["reviewId"]
 
 
-def _suggest_reply(review: dict) -> str | None:
-    """Ask the AI for a suggested response to this review (None on any failure)."""
-    comment = _user_comment(review)
-    return generate_suggested_reply(
-        "Google Play",
-        _rating_value(comment.get("starRating")),
-        "No Title",  # Google Play has no separate title field
-        _display_value(comment.get("text"), "No review text provided."),
-    )
+def _suggest_batch(new_reviews: list[dict]) -> dict[str, str]:
+    """One Codex call for all new Google Play reviews → {review_id: reply}."""
+    items = []
+    for review in new_reviews:
+        comment = _user_comment(review)
+        items.append(
+            {
+                "id": review["reviewId"],
+                "platform": "Google Play",
+                "rating": _rating_value(comment.get("starRating")),
+                "title": "",  # Google Play has no separate title field
+                "body": _display_value(comment.get("text"), "No review text provided."),
+            }
+        )
+    return generate_suggested_replies(items)
 
 
 def normalize_entry(review: dict, suggested_reply: str | None) -> dict:
@@ -373,6 +379,6 @@ def run_playstore_collect() -> tuple[list[dict], dict]:
         # lastModified order is mutable; never stop at the boundary (see fetch_reviews).
         stop_at_boundary=False,
         baseline_all_fetched=True,
-        suggestion_generator=_suggest_reply,
+        suggestion_generator=_suggest_batch,
     ) if reviews else []
     return entries, state

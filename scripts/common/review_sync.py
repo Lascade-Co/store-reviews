@@ -78,8 +78,9 @@ def collect_new_reviews(
 
     Records posted_at + the reply flag + posted_ids and advances
     last_review_id, then returns ``normalizer(review, suggested_reply)`` dicts
-    for the app's pending-list data file. ``suggestion_generator`` must never
-    raise (AI is an optional enhancement).
+    for the app's pending-list data file. ``suggestion_generator`` is called
+    ONCE with the list of new reviews and returns ``{review_id: reply}``; it
+    must never raise (AI is an optional enhancement).
 
     ``baseline_all_fetched`` (used by Google, whose selection has no boundary
     stop): on the initial sync, record EVERY fetched review id in posted_ids —
@@ -89,12 +90,13 @@ def collect_new_reviews(
     new_reviews = select_new_reviews(
         reviews, state, initial_sync, initial_count, review_id_getter, stop_at_boundary
     )
+    suggestions = suggestion_generator(new_reviews) if (new_reviews and suggestion_generator) else {}
     entries: list[dict] = []
     if new_reviews:
         LOG.info("Collected %d new %s review(s) for the dashboard", len(new_reviews), provider)
         for review in reversed(new_reviews):
             review_id = review_id_getter(review)
-            suggested_reply = suggestion_generator(review) if suggestion_generator else None
+            suggested_reply = suggestions.get(review_id)
             upsert_review(
                 state,
                 review_id,

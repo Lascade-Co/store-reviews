@@ -1,114 +1,75 @@
 import json
 import os
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from common.ai_reply import (
-    DEFAULT_OPENAI_MODEL,
-    MAX_SUGGESTED_REPLY_LENGTH,
-    OPENAI_API_URL,
-    generate_suggested_reply,
-)
+from common import ai_reply
+from common.ai_reply import MAX_SUGGESTED_REPLY_LENGTH, generate_suggested_replies
 
 
-def openai_response(content: str) -> Mock:
-    response = Mock(ok=True, status_code=200, text="")
-    response.json.return_value = {"choices": [{"message": {"content": content}}]}
-    return response
+REVIEWS = [
+    {"id": "r1", "platform": "Google Play", "rating": 5, "title": "", "body": "buena"},
+    {"id": "r2", "platform": "Apple App Store", "rating": 2, "title": "Bad", "body": "too costly"},
+]
 
 
-class AiReplyTests(unittest.TestCase):
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"})
-    @patch("common.ai_reply.request_with_retries")
-    def test_generates_reply_from_json_content(self, request):
-        request.return_value = openai_response(json.dumps({"reply": "Thanks for the feedback!"}))
+class GenerateSuggestedRepliesTests(unittest.TestCase):
+    def test_empty_input_returns_empty_without_codex(self):
+        with patch.object(ai_reply, "_codex_available", return_value=True) as avail:
+            self.assertEqual(generate_suggested_replies([]), {})
+            avail.assert_not_called()
 
-        result = generate_suggested_reply("Google Play", 4, "Nice", "Works well")
+    def test_missing_codex_auth_skips(self):
+        with patch.object(ai_reply, "_codex_available", return_value=False):
+            with patch("common.ai_reply.subprocess.run") as run:
+                self.assertEqual(generate_suggested_replies(REVIEWS), {})
+                run.assert_not_called()
 
-        self.assertEqual(result, "Thanks for the feedback!")
-        args, kwargs = request.call_args
-        self.assertEqual(args, ("POST", OPENAI_API_URL))
-        self.assertEqual(kwargs["json"]["model"], DEFAULT_OPENAI_MODEL)
-        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer sk-test")
-        self.assertEqual(kwargs["json"]["response_format"]["type"], "json_schema")
-        self.assertIn("Works well", kwargs["json"]["messages"][1]["content"])
+    def test_reads_codex_output_file(self):
+        def fake_run(cmd, **kwargs):
+            # Codex writes the output file into its cwd (the scratch dir).
+            with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
+                json.dump({"r1": "¡Gracias!", "r2": "Sorry to hear that."}, fh)
 
-    @patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False)
-    @patch("common.ai_reply.request_with_retries")
-    def test_missing_api_key_skips_without_request(self, request):
-        self.assertIsNone(generate_suggested_reply("Google Play", 4, "T", "B"))
-        request.assert_not_called()
+            class R:  # minimal CompletedProcess stand-in
+                pass
 
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"})
-    @patch("common.ai_reply.request_with_retries")
-    def test_http_error_returns_none(self, request):
-        # 429s are retried with Retry-After inside request_with_retries; if the
-        # limit is still exhausted the final 429 must degrade to "no suggestion".
-        request.return_value = Mock(ok=False, status_code=429, text="rate limited")
+            return R()
 
-        self.assertIsNone(generate_suggested_reply("Google Play", 1, "T", "B"))
+        with patch.object(ai_reply, "_codex_available", return_value=True), \
+             patch("common.ai_reply.subprocess.run", side_effect=fake_run) as run:
+            result = generate_suggested_replies(REVIEWS)
 
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"})
-    @patch("common.ai_reply.request_with_retries")
-    def test_network_exception_returns_none(self, request):
-        request.side_effect = RuntimeError("connection reset")
+        self.assertEqual(result, {"r1": "¡Gracias!", "r2": "Sorry to hear that."})
+        # Correct codex invocation.
+        cmd = run.call_args.args[0]
+        self.assertEqual(cmd[:2], ["codex", "exec"])
+        self.assertIn("--sandbox", cmd)
 
-        self.assertIsNone(generate_suggested_reply("Apple App Store", 5, "T", "B"))
+    def test_codex_failure_returns_empty(self):
+        with patch.object(ai_reply, "_codex_available", return_value=True), \
+             patch("common.ai_reply.subprocess.run", side_effect=RuntimeError("codex died")):
+            self.assertEqual(generate_suggested_replies(REVIEWS), {})
 
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"})
-    @patch("common.ai_reply.request_with_retries")
-    def test_plain_text_content_is_accepted_as_fallback(self, request):
-        request.return_value = openai_response("Sorry to hear that — we're on it.")
+    def test_missing_output_file_returns_empty(self):
+        with patch.object(ai_reply, "_codex_available", return_value=True), \
+             patch("common.ai_reply.subprocess.run", return_value=None):
+            # subprocess "succeeded" but wrote no file -> open() raises -> {}
+            self.assertEqual(generate_suggested_replies(REVIEWS), {})
 
-        result = generate_suggested_reply("Apple App Store", 2, "T", "B")
+    def test_overlong_and_blank_replies_are_clamped_and_dropped(self):
+        def fake_run(cmd, **kwargs):
+            with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
+                json.dump({"r1": "x" * 600, "r2": "   ", "r3": 5}, fh)
+            return None
 
-        self.assertEqual(result, "Sorry to hear that — we're on it.")
+        with patch.object(ai_reply, "_codex_available", return_value=True), \
+             patch("common.ai_reply.subprocess.run", side_effect=fake_run):
+            result = generate_suggested_replies(REVIEWS)
 
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"})
-    @patch("common.ai_reply.request_with_retries")
-    def test_overlong_reply_is_clamped(self, request):
-        request.return_value = openai_response(json.dumps({"reply": "x" * 600}))
-
-        result = generate_suggested_reply("Google Play", 3, "T", "B")
-
-        self.assertEqual(len(result), MAX_SUGGESTED_REPLY_LENGTH)
-
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"})
-    @patch("common.ai_reply.request_with_retries")
-    def test_reasoning_headroom_parameters_are_sent(self, request):
-        # gpt-5.6-luna defaults to medium reasoning effort; the request must
-        # pin it low and leave token headroom so the answer is never truncated.
-        request.return_value = openai_response(json.dumps({"reply": "ok"}))
-
-        generate_suggested_reply("Google Play", 5, "T", "B")
-
-        payload = request.call_args.kwargs["json"]
-        self.assertEqual(payload["reasoning_effort"], "low")
-        self.assertGreaterEqual(payload["max_completion_tokens"], 1024)
-
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "OPENAI_MODEL": "gpt-5.4-mini"})
-    @patch("common.ai_reply.request_with_retries")
-    def test_model_override_via_env(self, request):
-        request.return_value = openai_response(json.dumps({"reply": "ok"}))
-
-        generate_suggested_reply("Google Play", 5, "T", "B")
-
-        self.assertEqual(request.call_args.kwargs["json"]["model"], "gpt-5.4-mini")
-
-    @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"})
-    @patch("common.ai_reply.request_with_retries")
-    def test_empty_or_malformed_response_returns_none(self, request):
-        for body in (
-            {},
-            {"choices": []},
-            {"choices": [{"message": {"content": ""}}]},
-            {"choices": [{"message": {"content": json.dumps({"reply": "   "})}}]},
-        ):
-            response = Mock(ok=True, status_code=200, text="")
-            response.json.return_value = body
-            request.return_value = response
-
-            self.assertIsNone(generate_suggested_reply("Google Play", 3, "T", "B"))
+        self.assertEqual(len(result["r1"]), MAX_SUGGESTED_REPLY_LENGTH)
+        self.assertNotIn("r2", result)  # blank dropped
+        self.assertNotIn("r3", result)  # non-string dropped
 
 
 if __name__ == "__main__":
