@@ -100,7 +100,6 @@ def collect_new_reviews(
             upsert_review(
                 state,
                 review_id,
-                last_reply_ts=None,
                 posted_at=now_iso(),
                 **{
                     reply_sent_key: (

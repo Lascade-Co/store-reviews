@@ -37,17 +37,12 @@ class PruneStateTests(unittest.TestCase):
     def test_replied_review_kept_inside_edit_window_dropped_after(self):
         state = prune(
             {
-                "fresh_reply": {"last_reply_ts": "1.0", "replied_at": days_ago(1)},
-                "stale_reply": {"last_reply_ts": "1.0", "replied_at": days_ago(3)},
+                "fresh_reply": {"replied_at": days_ago(1)},
+                "stale_reply": {"replied_at": days_ago(3)},
             }
         )
         self.assertIn("fresh_reply", state["reviews"])
         self.assertNotIn("stale_reply", state["reviews"])
-
-    def test_disabled_thread_dropped_but_id_preserved(self):
-        state = prune({"dead": {"slack_thread_disabled": True, "posted_at": days_ago(1)}})
-        self.assertNotIn("dead", state["reviews"])
-        self.assertIn("dead", state["posted_ids"])
 
     def test_missing_timestamp_is_kept(self):
         state = prune({"no_ts": {}})

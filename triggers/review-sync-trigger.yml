@@ -8,9 +8,9 @@ name: Trigger Review Sync
 on:
   workflow_dispatch:
   schedule:
-    # ~05:00 & ~15:00 IST (cron is UTC). Same cron for every app — do not
-    # edit; the stagger step below spreads apps out automatically.
-    - cron: "30 23,9 * * *"
+    # 06:00 IST daily (cron is UTC, IST = UTC+5:30). Same cron for every
+    # app — do not edit; the stagger step below spreads apps out automatically.
+    - cron: "30 0 * * *"
 
 permissions:
   contents: read
@@ -19,6 +19,9 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
+      # Repo-specific deterministic 0-5 min delay so apps sharing the cron do
+      # not all hit the central workflow at the same instant. Skipped on manual
+      # runs. Logs the delay and a per-minute countdown.
       - name: Stagger start (repo-specific delay; skipped on manual runs)
         if: github.event_name == 'schedule'
         run: |
@@ -40,7 +43,8 @@ jobs:
       - name: Dispatch to central review-bot
         uses: peter-evans/repository-dispatch@v4
         with:
-          token: ${{ secrets.CENTRAL_DISPATCH_TOKEN }}
+          # PAT/GitHub-App token allowed to dispatch to Lascade-Co/store-reviews.
+          token: ${{ secrets.STORE_REVIEWS_DISPATCH_TOKEN }}
           repository: Lascade-Co/store-reviews
           event-type: review-sync
           # project_slug is the app's Infisical project slug

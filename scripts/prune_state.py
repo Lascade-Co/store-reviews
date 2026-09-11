@@ -1,14 +1,12 @@
-"""Prune inactive reviews from a state file to bound per-run Slack polling.
+"""Prune inactive reviews from a state file to keep the active set bounded.
 
-Every run polls `conversations.replies` once per review in the `reviews` map, so
-that map must stay small. This drops reviews that are no longer worth polling
-while keeping their ids in `posted_ids` (the permanent dedup set), so a pruned
-review is never re-posted.
+The `reviews` map holds only reviews still worth showing on the dashboard. This
+drops the rest while keeping their ids in `posted_ids` (the permanent dedup
+set), so a pruned review is never re-published.
 
 Rules (a review is kept only if it is still "active"):
-  - replied:   keep for REPLY_EDIT_WINDOW_DAYS after the reply (allow an edit/replacement)
-  - un-replied: keep for OPEN_POLL_WINDOW_DAYS after it was posted, then stop polling
-  - disabled thread: never poll again
+  - replied:   keep for REPLY_EDIT_WINDOW_DAYS after the reply, then drop
+  - un-replied: keep for OPEN_POLL_WINDOW_DAYS after it was posted, then drop
 
 Run in the commit job AFTER the remote merge (running it before the merge would
 be undone by the union). No-op if the file does not exist.
@@ -49,14 +47,12 @@ def prune_inactive(state: dict, now: datetime) -> dict:
         posted.add(review_id)  # never lose the id — dedup must be permanent
         if not isinstance(entry, dict):
             continue
-        if entry.get("slack_thread_disabled"):
-            continue  # dead thread → stop polling
-        if entry.get("last_reply_ts"):
+        if entry.get("replied_at"):
             if _age_days(entry.get("replied_at"), now) <= REPLY_EDIT_WINDOW_DAYS:
-                kept[review_id] = entry  # replied recently → keep for edits
+                kept[review_id] = entry  # replied recently → keep briefly
         else:
             if _age_days(entry.get("posted_at"), now) <= OPEN_POLL_WINDOW_DAYS:
-                kept[review_id] = entry  # open & recent → keep polling
+                kept[review_id] = entry  # open & recent → keep on the dashboard
     state["reviews"] = kept
     state["posted_ids"] = sorted(posted)
     return state

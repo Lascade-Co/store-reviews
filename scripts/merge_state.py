@@ -22,32 +22,21 @@ def merge_states(remote: dict, local: dict) -> dict:
         remote_entry = remote_reviews[review_id]
         local_entry = local_reviews[review_id]
         entry = {**remote_entry, **local_entry}
-        if remote_entry.get("slack_ts") and not local_entry.get("slack_ts"):
-            entry["slack_ts"] = remote_entry["slack_ts"]
-        reply_timestamps = [remote_entry.get("last_reply_ts"), local_entry.get("last_reply_ts")]
-        reply_timestamps = [value for value in reply_timestamps if isinstance(value, str)]
-        if reply_timestamps:
-            latest_reply_entry = max(
-                (remote_entry, local_entry),
-                key=lambda candidate: _timestamp(candidate.get("last_reply_ts")),
-            )
-            entry["last_reply_ts"] = latest_reply_entry["last_reply_ts"]
-            if "last_sent_reply_hash" in latest_reply_entry:
-                entry["last_sent_reply_hash"] = latest_reply_entry["last_sent_reply_hash"]
+        # Preserve the newest reply (by replied_at) with its matching hash, so a
+        # concurrent commit can't lose a reply that was just sent.
+        replied_ats = [
+            e for e in (remote_entry, local_entry) if isinstance(e.get("replied_at"), str)
+        ]
+        if replied_ats:
+            newer = max(replied_ats, key=lambda candidate: _timestamp(candidate.get("replied_at")))
+            entry["replied_at"] = newer["replied_at"]
+            if "last_sent_reply_hash" in newer:
+                entry["last_sent_reply_hash"] = newer["last_sent_reply_hash"]
             else:
-                # A legacy entry has no hash. Do not pair a hash from an
-                # older response with the newer timestamp.
                 entry.pop("last_sent_reply_hash", None)
-        reply_status_keys = {
-            key
-            for key in set(remote_entry) | set(local_entry)
-            if key.endswith("_reply_sent")
-        }
-        for key in reply_status_keys:
+        # Any side's "replied sent" flag wins.
+        for key in {k for k in set(remote_entry) | set(local_entry) if k.endswith("_reply_sent")}:
             entry[key] = bool(remote_entry.get(key) or local_entry.get(key))
-        entry["slack_thread_disabled"] = bool(
-            remote_entry.get("slack_thread_disabled") or local_entry.get("slack_thread_disabled")
-        )
         reviews[review_id] = entry
     merged["reviews"] = reviews
 
