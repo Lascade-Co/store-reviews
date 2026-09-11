@@ -8,8 +8,7 @@ name: Trigger Review Sync
 on:
   workflow_dispatch:
   schedule:
-    # 06:00 IST daily (cron is UTC, IST = UTC+5:30). Same cron for every
-    # app — do not edit; the stagger step below spreads apps out automatically.
+    # 06:00 IST daily (cron is UTC, IST = UTC+5:30). Same cron for every app.
     - cron: "30 0 * * *"
 
 permissions:
@@ -19,27 +18,6 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      # Repo-specific deterministic 0-5 min delay so apps sharing the cron do
-      # not all hit the central workflow at the same instant. Skipped on manual
-      # runs. Logs the delay and a per-minute countdown.
-      - name: Stagger start (repo-specific delay; skipped on manual runs)
-        if: github.event_name == 'schedule'
-        run: |
-          OFFSET=$(( $(cksum <<< "$GITHUB_REPOSITORY" | cut -d' ' -f1) % 300 ))
-          DISPATCH_AT=$(date -u -d "+${OFFSET} seconds" '+%H:%M:%S')
-          echo "Repository:       ${GITHUB_REPOSITORY}"
-          echo "Stagger delay:    ${OFFSET}s (deterministic, derived from the repo name)"
-          echo "Current time:     $(date -u '+%Y-%m-%d %H:%M:%S') UTC"
-          echo "Dispatching at:   ${DISPATCH_AT} UTC"
-          REMAINING=${OFFSET}
-          while [ "${REMAINING}" -gt 0 ]; do
-            STEP=$(( REMAINING < 60 ? REMAINING : 60 ))
-            echo "$(date -u '+%H:%M:%S') UTC | waiting, ${REMAINING}s left (dispatch at ${DISPATCH_AT} UTC)"
-            sleep "${STEP}"
-            REMAINING=$(( REMAINING - STEP ))
-          done
-          echo "$(date -u '+%H:%M:%S') UTC | stagger complete, dispatching now"
-
       - name: Dispatch to central review-bot
         uses: peter-evans/repository-dispatch@v4
         with:

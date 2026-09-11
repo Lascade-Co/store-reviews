@@ -117,8 +117,7 @@ name: Trigger Review Sync
 on:
   workflow_dispatch:
   schedule:
-    # 06:00 IST daily (GitHub cron is UTC). Same cron in every app —
-    # the stagger step spreads apps out automatically.
+    # 06:00 IST daily (GitHub cron is UTC). Same cron in every app.
     - cron: "30 0 * * *"
 
 permissions:
@@ -128,11 +127,6 @@ jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Stagger start (repo-specific delay; skipped on manual runs)
-        if: github.event_name == 'schedule'
-        run: |
-          OFFSET=$(( $(cksum <<< "$GITHUB_REPOSITORY" | cut -d' ' -f1) % 300 ))
-          echo "Staggering ${OFFSET}s"; sleep "${OFFSET}"
       - name: Dispatch to central review-bot
         uses: peter-evans/repository-dispatch@v4
         with:
@@ -145,10 +139,6 @@ jobs:
 
 Notes:
 
-- **Don't edit the cron.** Every app uses the same `30 0 * * *`; the "Stagger start" step delays
-  each app by a fixed, deterministic 0–5-minute offset (`cksum` of the repo name, mod 300) so apps
-  never hit the central workflow / shared Slack bot / R2 at the same instant — with zero
-  coordination between teams. Manual runs skip the delay.
 - `project_slug` is the app's **Infisical project slug** — it selects the app's `/reviews` secrets,
   names its state folder (`state/<project_slug>/`), and is the `?app=` value in the dashboard link.
   It must match exactly.
@@ -244,7 +234,7 @@ approves it — a reply will fail until then.(ask admin to approave the token fr
 ## Schedule
 
 Once daily per app — around **06:00 IST** (`cron: "30 0 * * *"` UTC, plus each app's
-automatic 0–5-minute repo-specific stagger). Manual runs anytime (they skip the stagger). GitHub
+no stagger needed — the per-run footprint is tiny and GitHub caps concurrent jobs). Manual runs anytime. GitHub
 may delay cron by a few minutes. A new review appears on the dashboard after the next scheduled run
 (or a manual run). Replies you send are published within ~a minute, independent of the schedule.
 

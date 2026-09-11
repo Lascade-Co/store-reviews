@@ -139,11 +139,14 @@ def notify_slack(new_count: int, slug: str) -> None:
         LOG.warning("SITE_BASE_URL not set; skipping Slack notification")
         return
     plural = "s" if new_count != 1 else ""
+    app_name = slug.replace("_", " ").title()
     try:
         slack = SlackClient()
         slack.post_review(
-            f"🆕 {new_count} new review{plural} for *{slug}* — "
-            f"review and reply at {site}/?app={slug}"
+            f"*{app_name}*\n"
+            f"{new_count} new review{plural} received\n\n"
+            f"Review and reply:\n"
+            f"{site}/?app={slug}"
         )
     except Exception:
         # Notification is best-effort: the data file is already uploaded.
