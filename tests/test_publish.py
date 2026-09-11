@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from common.publish import build_list, decode_payload, encode_payload
+from common.publish import build_list, decode_payload, encode_payload, publish
 from common.review_sync import collect_new_reviews
 
 
@@ -82,6 +82,46 @@ class BuildListTests(unittest.TestCase):
         result = build_list(previous, states, new, "slug")
 
         self.assertEqual([item["review_id"] for item in result["reviews"]], ["r2", "r1"])
+
+
+class PublishNotifyTests(unittest.TestCase):
+    """Slack's count must equal what the dashboard shows: new AND pending only."""
+
+    def _publish(self, new_entries, states):
+        with patch("common.publish.download_current", return_value=None), patch(
+            "common.publish.upload"
+        ), patch("common.publish.notify_slack") as notify:
+            publish("slug", states, new_entries)
+        return notify
+
+    def test_notify_counts_only_pending_new_reviews(self):
+        # Two freshly-fetched reviews, but "answered1" already had a store reply
+        # (its reply_sent flag is set) so it is filtered off the dashboard.
+        new_entries = [entry("appstore", "new1"), entry("appstore", "answered1")]
+        states = {
+            "appstore": {
+                "reviews": {
+                    "new1": {},
+                    "answered1": {"apple_reply_sent": True},
+                }
+            },
+            "playstore": {"reviews": {}},
+        }
+
+        notify = self._publish(new_entries, states)
+
+        notify.assert_called_once_with(1, "slug")  # not 2 — the replied one is excluded
+
+    def test_notify_counts_all_when_every_new_review_is_pending(self):
+        new_entries = [entry("appstore", "n1"), entry("playstore", "n2")]
+        states = {
+            "appstore": {"reviews": {"n1": {}}},
+            "playstore": {"reviews": {"n2": {}}},
+        }
+
+        notify = self._publish(new_entries, states)
+
+        notify.assert_called_once_with(2, "slug")
 
 
 class CollectNewReviewsTests(unittest.TestCase):

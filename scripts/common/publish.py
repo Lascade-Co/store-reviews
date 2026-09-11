@@ -158,4 +158,9 @@ def publish(slug: str, states: dict, new_entries: list[dict]) -> None:
     previous = download_current(slug)
     payload = build_list(previous, states, new_entries, slug)
     upload(payload, slug)
-    notify_slack(len(new_entries), slug)
+    # Count only NEW reviews that are actually pending — i.e. shown on the
+    # dashboard. A freshly-fetched review that already had a store reply is
+    # recorded but filtered out of the dashboard; it must not inflate the
+    # "new reviews received" number so Slack matches what the dashboard shows.
+    new_pending = sum(1 for entry in new_entries if _entry_is_pending(entry, states))
+    notify_slack(new_pending, slug)

@@ -1,0 +1,48 @@
+{
+  "project_slug": "demo",
+  "generated_at": "2026-09-08T05:05:00+00:00",
+  "reviews": [
+    {
+      "platform": "appstore",
+      "review_id": "00000183-demo-0001",
+      "rating": 2,
+      "title": "Not good price",
+      "body": "Price too higher than other apps",
+      "reviewer": "MD NOWAB ALI",
+      "territory_or_language": "IND",
+      "reviewed_at": "2026-09-03T05:11:00+00:00",
+      "detected_at": "2026-09-08T05:04:00+00:00",
+      "suggested_reply": "Thank you for your feedback. We're sorry the prices didn't meet your expectations — we compare many airlines to surface the best fares and are working to improve. We appreciate your input!",
+      "replied": false,
+      "reply_text": null
+    },
+    {
+      "platform": "playstore",
+      "review_id": "fd1bbf17-demo-0002",
+      "rating": 5,
+      "title": null,
+      "body": "muy satisfecha clara y actualizada",
+      "reviewer": "Key",
+      "territory_or_language": "es",
+      "reviewed_at": "2026-09-05T23:57:00+00:00",
+      "detected_at": "2026-09-08T05:04:00+00:00",
+      "suggested_reply": "¡Muchas gracias por tu reseña! Nos alegra que la app te resulte clara y actualizada. ¡Gracias por tu apoyo!",
+      "replied": false,
+      "reply_text": null
+    },
+    {
+      "platform": "appstore",
+      "review_id": "00000183-demo-0003",
+      "rating": 5,
+      "title": "Very reliable",
+      "body": "This app can connect you to all the different airline websites to get the best price.",
+      "reviewer": "Black-007",
+      "territory_or_language": "DNK",
+      "reviewed_at": "2026-09-06T08:04:00+00:00",
+      "detected_at": "2026-09-08T05:04:00+00:00",
+      "suggested_reply": null,
+      "replied": false,
+      "reply_text": null
+    }
+  ]
+}
