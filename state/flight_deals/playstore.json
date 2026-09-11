@@ -1,7 +1,7 @@
 {
     "state_version": 2,
     "last_review_id": "189cbcbf-8f8e-4051-b21b-410b90c24f87",
-    "last_checked": "2026-09-11T05:58:28.454170+00:00",
+    "last_checked": "2026-09-11T06:03:44.870948+00:00",
     "posted_ids": [
         "0773dd3f-3a78-4b45-90f8-e4ba9732b5ce",
         "189cbcbf-8f8e-4051-b21b-410b90c24f87"
@@ -13,7 +13,9 @@
         },
         "189cbcbf-8f8e-4051-b21b-410b90c24f87": {
             "posted_at": "2026-09-11T05:58:28.452961+00:00",
-            "google_reply_sent": false
+            "google_reply_sent": true,
+            "last_sent_reply_hash": "cf7a69344f833a70a8c86242d522b148402342b050ba58c6c48b3826a1407b47",
+            "replied_at": "2026-09-11T06:03:44.870795+00:00"
         }
     }
 }
