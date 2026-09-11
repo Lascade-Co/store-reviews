@@ -1,30 +1,66 @@
 name: Review Sync (Central)
-run-name: "review-sync · ${{ github.event.client_payload.project_slug || inputs.project_slug }}"
+run-name: "review-sync · ${{ inputs.project_slug || 'all apps' }}"
+
+# Central scheduled sync. One cron here fans out over apps.json and runs every
+# app in parallel (one matrix job each) — no per-app trigger repos, no dispatch
+# token. Add an app by adding its Infisical project slug to apps.json.
+# Manual run: use "Run workflow" and optionally set project_slug to sync a
+# single app; leave it empty to sync every app in apps.json.
 
 on:
-  repository_dispatch:
-    types: [review-sync]
   workflow_dispatch:
     inputs:
       project_slug:
-        description: "Infisical project slug — selects the app's /reviews secrets and names its state folder (state/<project_slug>/)"
-        required: true
+        description: "Optional single Infisical project slug to sync just that app. Leave empty to sync every app in apps.json."
+        required: false
         type: string
-
-concurrency:
-  group: review-sync-${{ github.event.client_payload.project_slug || inputs.project_slug }}
-  cancel-in-progress: false
+  schedule:
+    # 06:00 IST daily (cron is UTC; IST = UTC+5:30). Same time for every app.
+    - cron: "30 0 * * *"
 
 jobs:
+  set-matrix:
+    name: Resolve app list
+    runs-on: ubuntu-latest
+    outputs:
+      slugs: ${{ steps.load.outputs.slugs }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build matrix from apps.json (or the single manual slug)
+        id: load
+        env:
+          MANUAL_SLUG: ${{ inputs.project_slug }}
+        run: |
+          set -euo pipefail
+          if [ -n "${MANUAL_SLUG}" ]; then
+            slugs="$(jq -cn --arg s "${MANUAL_SLUG}" '[$s]')"
+          else
+            slugs="$(jq -c '.slugs' apps.json)"
+          fi
+          echo "Resolved slugs: ${slugs}"
+          echo "slugs=${slugs}" >> "$GITHUB_OUTPUT"
+
   sync:
     # Web-dashboard mode: both providers run sequentially in ONE job so a
     # single writer produces the app's pending-list file on R2 (no matrix
-    # race) and exactly one Slack notification is sent per run.
-    name: Sync and Publish
+    # race) and exactly one Slack notification is sent per run. The matrix
+    # here is over APPS (one job per app), not providers.
+    name: Sync ${{ matrix.slug }}
+    needs: set-matrix
+    strategy:
+      fail-fast: false
+      matrix:
+        slug: ${{ fromJson(needs.set-matrix.outputs.slugs) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
+    # Per-app group, shared with reply-review.yml, so a sync and a reply for
+    # the same app never run at once. Different apps still run in parallel.
+    concurrency:
+      group: review-sync-${{ matrix.slug }}
+      cancel-in-progress: false
     env:
       # `secrets` context is not allowed inside a step-level `if:`; hoist the
       # presence check into a job-level env var (env CAN read secrets) and test
@@ -69,7 +105,7 @@ jobs:
           fi
       - name: Fetch review secrets from Infisical
         # Per-app secrets live in the app's Infisical project, folder /reviews
-        # project_slug IS the Infisical project slug. export-type env injects
+        # matrix.slug IS the Infisical project slug. export-type env injects
         # each key as a masked env var for the following steps. A platform
         # whose keys are absent from /reviews is skipped by that provider's
         # guard. SLACK_BOT_TOKEN is optional per-app: a non-empty value here
@@ -79,14 +115,14 @@ jobs:
           method: universal
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          project-slug: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
+          project-slug: ${{ matrix.slug }}
           env-slug: "prod"
           domain: ${{ secrets.INFISICAL_DOMAIN }}
           secret-path: /reviews
           export-type: env
       - name: Sync Reviews and Publish Dashboard Data
         env:
-          PROJECT_SLUG: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
+          PROJECT_SLUG: ${{ matrix.slug }}
           # One internal bot serves every app by default, so its token lives
           # once on this repo. An app can still override it by putting its own
           # SLACK_BOT_TOKEN in its Infisical /reviews folder: the code prefers
@@ -108,20 +144,33 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.client_payload.project_slug || inputs.project_slug }}-state
-          path: state/${{ github.event.client_payload.project_slug || inputs.project_slug }}/
+          name: ${{ matrix.slug }}-state
+          path: state/${{ matrix.slug }}/
           if-no-files-found: warn
 
   commit-state:
-    name: Commit Updated State
-    needs: [sync]
-    if: always()
+    # One commit job per app (mirrors the sync matrix). max-parallel: 1 pushes
+    # them one at a time so state commits never race each other on main; the
+    # per-attempt fetch+merge+retry below still reconciles against reply runs.
+    name: Commit state · ${{ matrix.slug }}
+    needs: [set-matrix, sync]
+    if: ${{ always() && needs.set-matrix.result == 'success' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        slug: ${{ fromJson(needs.set-matrix.outputs.slugs) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+    # Shared per-app group again: a state commit and a reply for the same app
+    # do not overlap.
+    concurrency:
+      group: review-sync-${{ matrix.slug }}
+      cancel-in-progress: false
     env:
-      PROJECT_SLUG: ${{ github.event.client_payload.project_slug || inputs.project_slug }}
+      PROJECT_SLUG: ${{ matrix.slug }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -131,8 +180,8 @@ jobs:
         if: always()
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.PROJECT_SLUG }}-state
-          path: state/${{ env.PROJECT_SLUG }}
+          name: ${{ matrix.slug }}-state
+          path: state/${{ matrix.slug }}
         continue-on-error: true
       - name: Commit Updated State
         run: |
@@ -153,9 +202,9 @@ jobs:
 
           # Reconcile this app's remote JSON into the just-synced local JSON.
           # merge_state.py merges in JSON space (newest reply timestamp with its
-          # matching hash, reply flags, disabled-thread status). This is why we
-          # do NOT use `git pull --rebase`: rebasing these files would only
-          # produce conflicts a line-based merge cannot resolve.
+          # matching hash, reply flags). This is why we do NOT use
+          # `git pull --rebase`: rebasing these files would only produce
+          # conflicts a line-based merge cannot resolve.
           merge_remote_state() {
             provider="$1"
             local_file="${APP_DIR}/${provider}.json"
@@ -167,7 +216,7 @@ jobs:
           }
 
           # Refresh from the latest remote, reconcile, prune, commit, and push on
-          # every attempt. Concurrent runs (this app queued, or other apps) can
+          # every attempt. Concurrent runs (this app queued, or a reply run) can
           # advance the branch between our fetch and push, so a rejected push is
           # retried up to 4 times, each time rebuilding the commit on the newest remote.
           for attempt in 1 2 3 4; do

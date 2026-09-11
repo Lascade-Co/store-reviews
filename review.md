@@ -52,9 +52,11 @@ App Store / Google Play
   expires.
 - Google Play replies over **350 characters** are truncated (store limit); App Store allows more.
 
-This central repo (`Lascade-Co/store-reviews`) serves **any number of apps**. The web dashboard
-lives in a separate project (deployed to a Cloudflare Worker). Connecting a new app requires no
-code change here — only the steps below.
+This central repo (`Lascade-Co/store-reviews`) serves **any number of apps** from a **single
+scheduled workflow**: one daily cron fans out over the app list in [`apps.json`](apps.json) and runs
+every app in parallel (one matrix job each). There is **no per-app trigger workflow and no dispatch
+token** — onboarding an app is a one-line addition to `apps.json`. The web dashboard lives in a
+separate project (deployed to a Cloudflare Worker).
 
 ---
 
@@ -105,48 +107,36 @@ In the app's Infisical project on `secrets.lascade.com`, create a folder named *
 
 <ins>For how to get each value, scroll to [Getting the credentials — exact steps](#getting-the-credentials--exact-steps).</ins>
 
-### Step 3 — Add the trigger workflow to the app repo
+### Step 3 — Add the app's slug to `apps.json`
 
-Copy [`triggers/review-sync-trigger.yml`](triggers/review-sync-trigger.yml) into the app repository
-at `.github/workflows/review-sync-trigger.yml` (on the **default branch** — the schedule only fires
-there), and set `project_slug` to the app's Infisical project slug:
+Add the app's **Infisical project slug** to the `slugs` list in [`apps.json`](apps.json) (in this
+central repo, on `main`):
 
-```yaml
-name: Trigger Review Sync
-
-on:
-  workflow_dispatch:
-  schedule:
-    # 06:00 IST daily (GitHub cron is UTC). Same cron in every app.
-    - cron: "30 0 * * *"
-
-permissions:
-  contents: read
-
-jobs:
-  dispatch:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch to central review-bot
-        uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.STORE_REVIEWS_DISPATCH_TOKEN }}
-          repository: Lascade-Co/store-reviews
-          event-type: review-sync
-          client-payload: >-
-            { "project_slug": "<your-infisical-project-slug>" }
+```json
+{
+  "slugs": [
+    "airlines70",
+    "flight_deals",
+    "your-infisical-project-slug"
+  ]
+}
 ```
+
+That single line is the entire onboarding — the scheduled workflow reads `apps.json` at runtime and
+picks up the new slug on its next run. No trigger workflow, no dispatch token, no code change.
 
 Notes:
 
 - `project_slug` is the app's **Infisical project slug** — it selects the app's `/reviews` secrets,
   names its state folder (`state/<project_slug>/`), and is the `?app=` value in the dashboard link.
   It must match exactly.
-- The payload carries **no secrets** — only the slug.
+- To stop syncing an app, remove its slug from the list; its `state/<slug>/` folder stays untouched.
 
 ### Step 4 — First run and verification
 
-1. Run it once manually: app repo → **Actions → Trigger Review Sync → Run workflow**.
+1. Run it once manually without waiting for the cron: `store-reviews` → **Actions → Review Sync
+   (Central) → Run workflow**, and set **project_slug** to the app's slug (this syncs just that one
+   app; leaving it empty syncs every app in `apps.json`).
 2. Watch the run in `store-reviews` → Actions. Expect:
    - **Fetch review secrets from Infisical** turns the `/reviews` keys into env vars.
    - **Sync Reviews and Publish Dashboard Data** fetches the newest reviews (up to 5 per platform
@@ -233,20 +223,22 @@ approves it — a reply will fail until then.(ask admin to approave the token fr
 
 ## Schedule
 
-Once daily per app — around **06:00 IST** (`cron: "30 0 * * *"` UTC, plus each app's
-no stagger needed — the per-run footprint is tiny and GitHub caps concurrent jobs). Manual runs anytime. GitHub
-may delay cron by a few minutes. A new review appears on the dashboard after the next scheduled run
-(or a manual run). Replies you send are published within ~a minute, independent of the schedule.
+One central cron — around **06:00 IST** (`cron: "30 0 * * *"` UTC) — fans out over every app in
+`apps.json` and runs them in parallel (one matrix job per app; no stagger needed — the per-run
+footprint is tiny and GitHub caps concurrent jobs). Manual runs anytime via **Run workflow** (set
+`project_slug` for one app, or leave it empty for all). GitHub may delay cron by a few minutes. A new
+review appears on the dashboard after the next scheduled run (or a manual run). Replies you send are
+published within ~a minute, independent of the schedule.
 
 ## Troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
 | `Error: Missing universal auth credentials` in the Infisical step | The `INFISICAL_CLIENT_ID/SECRET/DOMAIN` GitHub secrets are missing/empty on `store-reviews`. Ask the backend team to (re-)provision them. |
-| Infisical step fails with project not found | `project_slug` in the trigger payload doesn't match the Infisical **project slug** (the Settings page value, not the display name). |
+| Infisical step fails with project not found | The slug in `apps.json` (or the manual `project_slug` input) doesn't match the Infisical **project slug** (the Settings page value, not the display name). |
 | A provider logs "not configured for this app; skipping" | That platform's keys are absent from `/reviews`. Intentional for single-platform apps; otherwise add the missing keys. |
 | Google Play returns 0 reviews | Normal: the Play API only returns reviews created/modified in the last 7 days that have text, production track only. |
-| Trigger run fails with 404/401 on dispatch | `STORE_REVIEWS_DISPATCH_TOKEN` missing/invalid on the app repo, or not allowed to dispatch to `store-reviews`. |
+| A new app never runs | Its slug isn't in `apps.json` (or the JSON is malformed — the **Resolve app list** job logs the parsed slug list). |
 | Dashboard shows no reviews / a CORS error in the console | The R2 bucket needs a CORS policy allowing GET from the dashboard's origin, OR the sync workflow hasn't run yet for this app, OR the `?app=` slug is wrong. The browser console `[reviews]` logs pinpoint which. |
 | Review shown without a Suggested Reply | `CODEX_AUTH_JSON_BASE_64` (central repo secret) missing/stale, or the Codex call failed that run — the sync is unaffected. A review shown without a suggestion never gets one later; write the reply manually. |
 | Reply button → "token rejected" | The fine-grained token is expired, lacks Actions:Read-and-write on `store-reviews`, or is pending org approval. Create/approve a valid token (see above). |
@@ -263,14 +255,16 @@ may delay cron by a few minutes. A new review appears on the dashboard after the
 | `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` / `R2_DATA_PREFIX` | Upload the per-app data file to Cloudflare R2 |
 | `SITE_BASE_URL` | Dashboard base URL used in the Slack notification link |
 
-`STORE_REVIEWS_DISPATCH_TOKEN` lives on the **app repos** (or as a Lascade-Co org secret), not here.
+All secrets live on this central repo — there is no per-app dispatch token anymore (the app list is
+just `apps.json`). The only browser-side credential is each developer's fine-grained token for the
+**Reply** button (see [Day-to-day usage](#day-to-day-usage)).
 
 ## Repo layout (central repo)
 
 ```
-.github/workflows/review-sync.yml    Workflow 1: fetch reviews, suggest, publish to R2, notify Slack
+.github/workflows/review-sync.yml    Workflow 1: cron fans out over apps.json, syncs each app, publishes to R2, notifies Slack
 .github/workflows/reply-review.yml   Workflow 2: publish a dashboard-approved reply to the store
-triggers/review-sync-trigger.yml     Trigger template to copy into app repos
+apps.json                            The app list — Infisical project slugs the scheduled sync runs for
 scripts/                             Python sync + reply logic (providers + shared helpers)
 state/<project_slug>/                Per-app sync state (committed by the workflows)
 tests/                               Unit tests (run locally via tests/run_all.py before pushing)
