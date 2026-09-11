@@ -25,6 +25,11 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    env:
+      # `secrets` context is not allowed inside a step-level `if:`; hoist the
+      # presence check into a job-level env var (env CAN read secrets) and test
+      # that instead. Empty secret -> "false" -> Codex steps skip, sync runs on.
+      HAS_CODEX: ${{ secrets.CODEX_AUTH_JSON_BASE_64 != '' }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -44,14 +49,14 @@ jobs:
         # ChatGPT plan (no per-token OpenAI key). Same pattern as
         # Lascade-Co/actions daily-catchup. Missing secret = suggestions are
         # skipped (ai_reply.py guards on ~/.codex/auth.json), sync still runs.
-        if: ${{ secrets.CODEX_AUTH_JSON_BASE_64 != '' }}
+        if: ${{ env.HAS_CODEX == 'true' }}
         env:
           CODEX_AUTH_JSON_BASE_64: ${{ secrets.CODEX_AUTH_JSON_BASE_64 }}
         run: |
           mkdir -p "$HOME/.codex"
           printf '%s' "$CODEX_AUTH_JSON_BASE_64" | tr -d '\n\r ' | base64 -d > "$HOME/.codex/auth.json"
       - name: Install Codex CLI and enable its sandbox
-        if: ${{ secrets.CODEX_AUTH_JSON_BASE_64 != '' }}
+        if: ${{ env.HAS_CODEX == 'true' }}
         run: |
           npm install -g @openai/codex
           current_userns="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)"
