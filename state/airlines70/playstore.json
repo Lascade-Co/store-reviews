@@ -1,0 +1,19 @@
+{
+    "state_version": 2,
+    "last_review_id": "d961d2f2-d258-4eae-acf8-538e5784c1fc",
+    "last_checked": "2026-09-12T04:56:07.084625+00:00",
+    "posted_ids": [
+        "d8c609db-f42f-43c1-b8e4-e07e2fbe2157",
+        "d961d2f2-d258-4eae-acf8-538e5784c1fc"
+    ],
+    "reviews": {
+        "d8c609db-f42f-43c1-b8e4-e07e2fbe2157": {
+            "posted_at": "2026-09-12T04:56:07.081667+00:00",
+            "google_reply_sent": false
+        },
+        "d961d2f2-d258-4eae-acf8-538e5784c1fc": {
+            "posted_at": "2026-09-12T04:56:07.083790+00:00",
+            "google_reply_sent": true
+        }
+    }
+}
