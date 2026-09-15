@@ -1,9 +1,4 @@
 
-
-
-The **web dashboard** is a separate project (Vite + React, deployed to a Cloudflare Worker); it is
-not in this repo.
-
 ## Maintaining This Repository
 
 > [!CAUTION]
