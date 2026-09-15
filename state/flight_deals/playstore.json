@@ -1,11 +1,12 @@
 {
     "state_version": 2,
-    "last_review_id": "fdf4da99-e825-4bc9-b3d6-8522b7078246",
-    "last_checked": "2026-09-13T05:17:18.730601+00:00",
+    "last_review_id": "a0bba22a-04af-41fe-9e44-c4cb5eb8cff4",
+    "last_checked": "2026-09-15T07:55:14.141817+00:00",
     "posted_ids": [
         "0773dd3f-3a78-4b45-90f8-e4ba9732b5ce",
         "189cbcbf-8f8e-4051-b21b-410b90c24f87",
         "45595d15-40ea-4c17-a28a-0c32197747a4",
+        "a0bba22a-04af-41fe-9e44-c4cb5eb8cff4",
         "fdf4da99-e825-4bc9-b3d6-8522b7078246"
     ],
     "reviews": {
@@ -17,14 +18,12 @@
             "posted_at": "2026-09-11T06:58:32.751006+00:00",
             "google_reply_sent": true
         },
-        "45595d15-40ea-4c17-a28a-0c32197747a4": {
-            "posted_at": "2026-09-11T06:58:32.751969+00:00",
-            "google_reply_sent": true,
-            "last_sent_reply_hash": "9ae1c4d3ce76559c78e9f069cc8e5dc0afc754a74081f77fdd193d2b272b1a32",
-            "replied_at": "2026-09-11T08:07:13.137884+00:00"
-        },
         "fdf4da99-e825-4bc9-b3d6-8522b7078246": {
             "posted_at": "2026-09-13T05:17:18.729443+00:00",
+            "google_reply_sent": false
+        },
+        "a0bba22a-04af-41fe-9e44-c4cb5eb8cff4": {
+            "posted_at": "2026-09-15T07:55:14.140332+00:00",
             "google_reply_sent": false
         }
     }
