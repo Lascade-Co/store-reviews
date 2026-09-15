@@ -1,3 +1,27 @@
+
+
+
+The **web dashboard** is a separate project (Vite + React, deployed to a Cloudflare Worker); it is
+not in this repo.
+
+## Maintaining This Repository
+
+> [!CAUTION]
+> ## Editing this repo? Always pull before pushing — NEVER force-push
+>
+> 1. **Pull right before you push:** `git pull --rebase origin main`. A "non-fast-forward" rejection
+>    just means a workflow committed state in between — pull and push again; nothing is broken.
+> 2. **Never `git push --force` to `main`.** It rewrites history and **deletes the state commits made
+>    since your last pull** — the permanent dedup ids (`posted_ids`) and reply status. The next run
+>    would then re-publish already-seen reviews and lose track of pending replies. A rejected push is
+>    always answered with *pull*, never *force*.
+> 3. **If you changed any code, run all tests before pushing** — one command:
+>    ```
+>    python3 tests/run_all.py
+>    ```
+>    The workflow itself does not run tests, so this is the only safety check. Only push when it ends
+>    with `OK`.
+
 # Store Reviews — Centralised Review System
 
 A single system that collects your app's customer reviews from the **Apple App Store** and **Google
@@ -435,24 +459,3 @@ scripts/                             Python sync + reply logic (providers + shar
 state/<project_slug>/                Per-app sync state (committed by the workflows)
 tests/                               Unit tests (run locally via tests/run_all.py before pushing)
 ```
-
-The **web dashboard** is a separate project (Vite + React, deployed to a Cloudflare Worker); it is
-not in this repo.
-
-## Maintaining This Repository
-
-> [!CAUTION]
-> ## Editing this repo? Always pull before pushing — NEVER force-push
->
-> 1. **Pull right before you push:** `git pull --rebase origin main`. A "non-fast-forward" rejection
->    just means a workflow committed state in between — pull and push again; nothing is broken.
-> 2. **Never `git push --force` to `main`.** It rewrites history and **deletes the state commits made
->    since your last pull** — the permanent dedup ids (`posted_ids`) and reply status. The next run
->    would then re-publish already-seen reviews and lose track of pending replies. A rejected push is
->    always answered with *pull*, never *force*.
-> 3. **If you changed any code, run all tests before pushing** — one command:
->    ```
->    python3 tests/run_all.py
->    ```
->    The workflow itself does not run tests, so this is the only safety check. Only push when it ends
->    with `OK`.
