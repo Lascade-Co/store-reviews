@@ -372,8 +372,8 @@ sync itself is unaffected.
 
 ## Dashboard
 
-The web dashboard is a **separate project** (Vite + React, deployed to a **Cloudflare Worker**); it
-is not in this repository. It reads each app's pending-review file (`<project_slug>.json`) from
+The web dashboard lives in **`dashboard/`** (Vite + React, deployed to **Cloudflare Pages**
+through the central `Lascade-Co/actions` repository). It reads each app's pending-review file (`<project_slug>.json`) from
 Cloudflare R2 and renders the reviews with their suggested replies. A developer edits or rewrites a
 reply and clicks **Reply**, which triggers the [Reply Workflow](#reply-workflow) via the GitHub API
 using their browser-stored [GitHub token](#github-token). The dashboard link used in Slack comes from
