@@ -1,9 +1,9 @@
 """Send one dashboard-approved reply to the store (workflow 2 entry point).
 
-Inputs arrive as environment variables from the reply-review workflow's
-dispatch inputs: PROJECT_SLUG, PLATFORM (appstore|playstore), REVIEW_ID,
-REPLY_TEXT. After the store accepts the reply, state is updated and the app's
-pending-list file is rebuilt (the replied entry drops out) and re-uploaded.
+Inputs arrive as environment variables from the reply-review workflow:
+APP_CODE, APP_NAME, PLATFORM (appstore|playstore), REVIEW_ID, REPLY_TEXT. After
+the store accepts the reply, state is updated and the app's pending-list file is
+rebuilt (the replied entry drops out) and re-uploaded.
 """
 
 import logging
@@ -21,7 +21,8 @@ REPLY_SENT_KEYS = {"appstore": "apple_reply_sent", "playstore": "google_reply_se
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    slug = os.environ.get("PROJECT_SLUG", "").strip()
+    app_code = os.environ.get("APP_CODE", "").strip()
+    app_name = os.environ.get("APP_NAME", "").strip() or app_code
     platform = os.environ.get("PLATFORM", "").strip()
     review_id = os.environ.get("REVIEW_ID", "").strip()
     reply_text = os.environ.get("REPLY_TEXT", "").strip()
@@ -29,8 +30,8 @@ def main() -> int:
     if platform not in REPLY_SENT_KEYS:
         LOG.error("PLATFORM must be appstore or playstore, got %r", platform)
         return 1
-    if not slug or not review_id or not reply_text:
-        LOG.error("PROJECT_SLUG, REVIEW_ID, and REPLY_TEXT are all required")
+    if not app_code or not review_id or not reply_text:
+        LOG.error("APP_CODE, REVIEW_ID, and REPLY_TEXT are all required")
         return 1
 
     state = load_state(platform)
@@ -67,8 +68,8 @@ def main() -> int:
 
     # Rebuild the pending-list so the dashboard stops showing this review.
     states = {"appstore": load_state("appstore"), "playstore": load_state("playstore")}
-    payload = build_list(download_current(slug), states, [], slug)
-    upload(payload, slug)
+    payload = build_list(download_current(app_code), states, [], app_code, app_name)
+    upload(payload, app_code)
     return 0
 
 

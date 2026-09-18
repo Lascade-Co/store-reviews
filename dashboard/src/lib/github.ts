@@ -85,7 +85,7 @@ export class AuthError extends Error {}
  * then sends the reply to the store and removes the review from the data file.
  */
 export async function dispatchReply(input: {
-  project_slug: string
+  app_code: string
   platform: Platform
   review_id: string
   reply_text: string

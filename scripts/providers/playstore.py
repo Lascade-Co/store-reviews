@@ -22,7 +22,6 @@ from common.utils import request_with_retries
 LOG = logging.getLogger(__name__)
 GOOGLE_PLAY_API = "https://androidpublisher.googleapis.com/androidpublisher/v3"
 GOOGLE_PLAY_SCOPE = "https://www.googleapis.com/auth/androidpublisher"
-INITIAL_SYNC_COUNT = 5
 MAX_RESULTS = 100
 MAX_REPLY_LENGTH = 350
 PAGE_CAP = 10
@@ -348,9 +347,11 @@ def run_playstore_collect() -> tuple[list[dict], dict]:
     LOG.info("Generating Google Play OAuth access token")
     credentials = _credentials()
     state = load_state("playstore")
-    initial_sync = not bool(state.get("last_review_id"))
+    # First run for this app = never baselined. On that run we record a baseline
+    # and post nothing, so only reviews that arrive after connection are shown.
+    initial_sync = not (state.get("baselined") or state.get("last_review_id"))
 
-    LOG.info("Fetching Google Play reviews%s", " (initial sync)" if initial_sync else "")
+    LOG.info("Fetching Google Play reviews%s", " (baseline run)" if initial_sync else "")
     reviews = fetch_reviews(credentials, max_pages=1) if initial_sync else fetch_reviews(credentials)
     LOG.info("Fetched %d Google Play review(s)", len(reviews))
 
@@ -371,14 +372,12 @@ def run_playstore_collect() -> tuple[list[dict], dict]:
         reviews,
         state,
         initial_sync,
-        INITIAL_SYNC_COUNT,
         _review_id,
         normalize_entry,
         "google_reply_sent",
         reply_sent_getter=_has_developer_reply,
         # lastModified order is mutable; never stop at the boundary (see fetch_reviews).
         stop_at_boundary=False,
-        baseline_all_fetched=True,
         suggestion_generator=_suggest_batch,
-    ) if reviews else []
+    )
     return entries, state

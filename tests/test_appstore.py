@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
-from providers.appstore import INITIAL_SYNC_COUNT, _review_id, fetch_reviews, normalize_entry
+from providers.appstore import _review_id, fetch_reviews, normalize_entry
 from common.review_sync import select_new_reviews
 
 
@@ -10,29 +10,18 @@ def review(review_id: str) -> dict:
     return {"id": review_id, "attributes": {"createdDate": review_id, "rating": 5}}
 
 
-def _new_reviews(reviews, state, initial_sync):
+def _new_reviews(reviews, state):
     # Apple uses the shared selection with the boundary stop enabled
     # (createdDate order is immutable, so stopping at last_review_id is safe).
-    return select_new_reviews(
-        reviews, state, initial_sync, INITIAL_SYNC_COUNT, _review_id, stop_at_boundary=True
-    )
+    return select_new_reviews(reviews, state, _review_id, stop_at_boundary=True)
 
 
 class AppStoreSyncTests(unittest.TestCase):
-    def test_initial_sync_is_limited_and_resumes_without_duplicates(self):
-        reviews = [review(str(number)) for number in range(10, 0, -1)]
-        state = {"last_review_id": None, "reviews": {"10": {}, "9": {}}}
-
-        result = _new_reviews(reviews, state, initial_sync=True)
-
-        self.assertEqual([item["id"] for item in result], ["8", "7", "6"])
-        self.assertEqual(INITIAL_SYNC_COUNT, 5)
-
     def test_incremental_sync_stops_at_last_review(self):
         reviews = [review("12"), review("11"), review("10"), review("9"), review("8")]
         state = {"last_review_id": "10", "reviews": {"10": {}, "9": {}, "8": {}}}
 
-        result = _new_reviews(reviews, state, initial_sync=False)
+        result = _new_reviews(reviews, state)
 
         self.assertEqual([item["id"] for item in result], ["12", "11"])
 
@@ -42,7 +31,7 @@ class AppStoreSyncTests(unittest.TestCase):
         reviews = [review("3"), review("2"), review("1")]
         state = {"last_review_id": "1", "reviews": {}, "posted_ids": ["2", "1"]}
 
-        result = _new_reviews(reviews, state, initial_sync=False)
+        result = _new_reviews(reviews, state)
 
         self.assertEqual([item["id"] for item in result], ["3"])
 

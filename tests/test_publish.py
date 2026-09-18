@@ -32,7 +32,7 @@ class BuildListTests(unittest.TestCase):
         }
 
     def test_payload_roundtrip_is_plain_json(self):
-        payload = {"project_slug": "x", "reviews": [entry("appstore", "r1")]}
+        payload = {"app_code": "x", "app_name": "X", "reviews": [entry("appstore", "r1")]}
         blob = encode_payload(payload)
         self.assertIn('"reviews"', blob)  # plain, human-inspectable JSON
         self.assertEqual(decode_payload(blob), payload)
@@ -42,11 +42,12 @@ class BuildListTests(unittest.TestCase):
         previous = {"reviews": [entry("appstore", "old1")]}
         states = self.states(appstore_reviews={"old1": {}, "new1": {}})
 
-        result = build_list(previous, states, [entry("appstore", "new1")], "slug")
+        result = build_list(previous, states, [entry("appstore", "new1")], "appcode", "App Name")
 
         ids = {item["review_id"] for item in result["reviews"]}
         self.assertEqual(ids, {"old1", "new1"})
-        self.assertEqual(result["project_slug"], "slug")
+        self.assertEqual(result["app_code"], "appcode")
+        self.assertEqual(result["app_name"], "App Name")
 
     def test_drops_replied_and_pruned_entries(self):
         previous = {
@@ -66,7 +67,7 @@ class BuildListTests(unittest.TestCase):
             playstore_reviews={"console1": {"google_reply_sent": True}},
         )
 
-        result = build_list(previous, states, [], "slug")
+        result = build_list(previous, states, [], "appcode", "App Name")
 
         ids = {item["review_id"] for item in result["reviews"]}
         self.assertEqual(ids, {"keep1"})
@@ -79,7 +80,7 @@ class BuildListTests(unittest.TestCase):
             entry("appstore", "r2", reviewed_at="2026-09-03T00:00:00+00:00"),
         ]
 
-        result = build_list(previous, states, new, "slug")
+        result = build_list(previous, states, new, "appcode", "App Name")
 
         self.assertEqual([item["review_id"] for item in result["reviews"]], ["r2", "r1"])
 
@@ -91,7 +92,7 @@ class PublishNotifyTests(unittest.TestCase):
         with patch("common.publish.download_current", return_value=None), patch(
             "common.publish.upload"
         ), patch("common.publish.notify_slack") as notify:
-            publish("slug", states, new_entries)
+            publish("appcode", "App Name", states, new_entries)
         return notify
 
     def test_notify_counts_only_pending_new_reviews(self):
@@ -110,7 +111,7 @@ class PublishNotifyTests(unittest.TestCase):
 
         notify = self._publish(new_entries, states)
 
-        notify.assert_called_once_with(1, "slug")  # not 2 — the replied one is excluded
+        notify.assert_called_once_with(1, "appcode", "App Name")  # not 2 — the replied one is excluded
 
     def test_notify_counts_all_when_every_new_review_is_pending(self):
         new_entries = [entry("appstore", "n1"), entry("playstore", "n2")]
@@ -121,12 +122,12 @@ class PublishNotifyTests(unittest.TestCase):
 
         notify = self._publish(new_entries, states)
 
-        notify.assert_called_once_with(2, "slug")
+        notify.assert_called_once_with(2, "appcode", "App Name")
 
 
 class CollectNewReviewsTests(unittest.TestCase):
-    def test_collect_updates_state_and_returns_entries_without_slack(self):
-        state = {"last_review_id": None, "reviews": {}, "posted_ids": []}
+    def test_first_run_baselines_and_returns_no_entries(self):
+        state = {"reviews": {}, "posted_ids": []}
         reviews = [{"id": f"r{n}"} for n in range(7, 0, -1)]  # newest first
 
         with patch("common.review_sync.save_state"):
@@ -135,21 +136,17 @@ class CollectNewReviewsTests(unittest.TestCase):
                 reviews,
                 state,
                 initial_sync=True,
-                initial_count=5,
                 review_id_getter=lambda r: r["id"],
                 normalizer=lambda r, s: {"platform": "appstore", "review_id": r["id"], "suggested_reply": s},
                 reply_sent_key="apple_reply_sent",
-                # Batch generator: one call with all new reviews -> {id: reply}.
                 suggestion_generator=lambda new: {r["id"]: "AI!" for r in new},
             )
 
-        self.assertEqual(len(entries), 5)  # newest 5 on initial sync
-        self.assertEqual(entries[0]["suggested_reply"], "AI!")
+        self.assertEqual(entries, [])  # nothing posted on the baseline run
+        self.assertTrue(state["baselined"])
         self.assertEqual(state["last_review_id"], "r7")
-        self.assertEqual(len(state["reviews"]), 5)
-        for review_entry in state["reviews"].values():
-            self.assertNotIn("slack_ts", review_entry)  # web mode: no Slack thread
-        self.assertEqual(len(state["posted_ids"]), 5)
+        self.assertEqual(state["reviews"], {})  # no reviews recorded as pending
+        self.assertEqual(set(state["posted_ids"]), {f"r{n}" for n in range(1, 8)})
 
     def test_incremental_collect_respects_boundary_and_dedup(self):
         state = {"last_review_id": "r5", "reviews": {"r5": {}}, "posted_ids": ["r5", "r4"]}
@@ -161,7 +158,6 @@ class CollectNewReviewsTests(unittest.TestCase):
                 reviews,
                 state,
                 initial_sync=False,
-                initial_count=5,
                 review_id_getter=lambda r: r["id"],
                 normalizer=lambda r, s: {"platform": "appstore", "review_id": r["id"]},
                 reply_sent_key="apple_reply_sent",

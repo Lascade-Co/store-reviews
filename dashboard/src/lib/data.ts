@@ -55,7 +55,7 @@ export async function fetchReviews(slug: string): Promise<ReviewPayload> {
   const acao = res.headers.get("access-control-allow-origin")
   console.info(`[reviews] access-control-allow-origin: ${acao ?? "(absent)"} ${acao ? "✓ CORS grants access" : ""}`)
   if (res.status === 404) {
-    console.error(`[reviews] 404 — no object at this path. Check: (a) app slug "${slug}" spelled exactly like the workflow's PROJECT_SLUG, (b) the prefix in VITE_DATA_BASE_URL matches the workflow's R2_DATA_PREFIX, (c) the sync workflow has run at least once for this app.`)
+    console.error(`[reviews] 404 — no object at this path. Check: (a) appcode "${slug}" matches an appcode in apps.json exactly, (b) the prefix in VITE_DATA_BASE_URL matches the workflow's R2_DATA_PREFIX, (c) the sync workflow has run at least once for this app.`)
     throw new Error(`No review data found for app "${slug}"`)
   }
   if (!res.ok) {

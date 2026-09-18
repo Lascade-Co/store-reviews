@@ -43,17 +43,17 @@ This checklist is all an experienced developer needs to connect a new app. Each 
 detailed explanation further down.
 
 1. **Collect the required credentials** — Apple and/or Google API keys, plus your app's Infisical
-   project slug. → See [What You Need](#what-you-need) and [Getting the Credentials](#getting-the-credentials--exact-steps).
+   project slug and a chosen **appcode**. → See [What You Need](#what-you-need) and [Getting the Credentials](#getting-the-credentials--exact-steps).
 2. **Choose a Slack channel** — use the shared `#store-reviews` channel (ID `C0C1190TA05`, the bot is
    already in it) or create your own and invite `@ReviewTravel`. → See [Step 1 — Slack Channel](#step-1--slack-channel).
 3. **Create the `/reviews` folder in Infisical** — in your app's project, **Production** environment.
    → See [Step 2 — Infisical](#step-2--infisical).
 4. **Add the required secrets** — the App Store / Google Play keys and `SLACK_CHANNEL_ID`. → See
    [Step 2 — Infisical](#step-2--infisical).
-5. **Add the app's Infisical project slug to [`apps.json`](apps.json)** — this one line is the actual
-   onboarding. → See [Step 3 — Add the App to apps.json](#step-3--add-the-app-to-appsjson).
+5. **Add the app to [`apps.json`](apps.json)** — one object with `appname`, `appcode`, and
+   `infisical_slug`. This is the actual onboarding. → See [Step 3 — Add the App to apps.json](#step-3--add-the-app-to-appsjson).
 6. **Run the review sync manually** — `store-reviews` → **Actions → Review Sync (Central) → Run
-   workflow**, with your slug as `project_slug`. → See [Step 4 — First Run and Verification](#step-4--first-run-and-verification).
+   workflow**, with your `appcode` as `app_code`. → See [Step 4 — First Run and Verification](#step-4--first-run-and-verification).
 7. **Verify** — the Slack channel gets a notification and the dashboard shows the app's reviews.
    → See [Step 4 — First Run and Verification](#step-4--first-run-and-verification).
 8. **Create a GitHub token** — needed only to *send* replies from the dashboard. → See
@@ -70,7 +70,9 @@ Steps 1–5 are one-time setup. After the first run, the daily schedule handles 
 | App Store Connect API key (`.p8`) with **Customer Reviews** read + response permission | Lets the system read and reply to App Store reviews. → [details](#app-store-credentials) |
 | Numeric Apple **App ID** (not the bundle ID) | Identifies the iOS app on Apple's API. → [details](#app-store-credentials) |
 | Google Play **service account JSON** with Play Console access to *view and reply to reviews* | Lets the system read and reply to Google Play reviews. → [details](#google-play-credentials) |
-| The app's **Infisical project slug** | Selects the app's secrets, names its state folder, and is the `?app=` value in the dashboard link. → [details](#step-3--add-the-app-to-appsjson) |
+| The app's **Infisical project slug** | Fetches the app's secrets from Infisical (the `infisical_slug` in apps.json). → [details](#step-3--add-the-app-to-appsjson) |
+| An **appcode** (short id you choose) | Names the R2 data file, the `?app=` dashboard link, and the state folder. → [details](#step-3--add-the-app-to-appsjson) |
+| An **appname** (display name) | Shown on the dashboard and in the Slack notification. → [details](#step-3--add-the-app-to-appsjson) |
 | A Slack channel (shared or dedicated) | Where new-review notifications are posted. → [details](#step-1--slack-channel) |
 | A fine-grained **GitHub token** (per developer) | Required only to send replies from the dashboard. → [details](#github-token) |
 
@@ -90,7 +92,7 @@ App Store / Google Play
   Review Sync  ──────────────►  AI suggestion (Codex) drafted for each review
         │                       review data written to storage (Cloudflare R2)
         ▼
-  Slack notification  ──►  "N new reviews — <dashboard>/?app=<slug>"
+  Slack notification  ──►  "N new reviews — <dashboard>/?app=<appcode>"
         │
         ▼
   Web Dashboard  ──►  developer reviews, edits, or rewrites the reply → clicks Reply
@@ -145,6 +147,9 @@ a personal token, which is stored only in *your* browser. You create it once. �
 
 All current, documented behaviour of the system:
 
+- **First run (baseline):** connecting an app shows **no existing reviews**. The first sync records
+  every current review as a baseline and posts nothing — only reviews that arrive **after** the app
+  is connected are ever shown.
 - **Fetch frequency:** reviews are fetched **once daily** (see [Schedule](#schedule)).
 - **Deduplication:** every review is shown **once**. A permanent record (`posted_ids`) ensures that
   even edited or re-appearing reviews never show again after they've been handled.
@@ -174,7 +179,7 @@ Gather these before you start (see [What You Need](#what-you-need) for the summa
 
 - **iOS:** App Store Connect API key (`.p8`), key ID, issuer ID, and the numeric Apple App ID.
 - **Android:** Google Play service account JSON and the app's package name.
-- **Both:** the app's Infisical project slug and a Slack channel.
+- **Both:** the app's Infisical project slug, a chosen appcode and appname, and a Slack channel.
 
 Provide only the platform(s) the app uses. No Slack bot token is required — a shared bot posts for
 all apps (optionally, an app can use its own bot by adding a non-empty `SLACK_BOT_TOKEN` to its
@@ -228,39 +233,55 @@ For an iOS-only or Android-only app, add only that platform's secrets plus `SLAC
 
 ## Step 3 — Add the App to apps.json
 
-Add the app's **Infisical project slug** to [`apps.json`](apps.json) (in this repo, on `main`):
+Add one object for the app to [`apps.json`](apps.json) (in this repo, on `main`):
 
 ```json
 {
-  "slugs": [
-    "airlines70",
-    "flight_deals",
-    "your-infisical-project-slug"
+  "apps": [
+    { "appname": "Airlines70", "appcode": "D1AS_D1IS", "infisical_slug": "airlines70" },
+    { "appname": "Flight Deals", "appcode": "M4AS_M4IS", "infisical_slug": "flight_deals" },
+    { "appname": "Your App", "appcode": "your_app_code", "infisical_slug": "your-infisical-project-slug" }
   ]
 }
 ```
 
-This one line is the entire onboarding — the scheduled workflow reads `apps.json` at runtime and
-picks up the new slug on its next run. No trigger workflow, no dispatch token, no code change.
+That object is the entire onboarding — the scheduled workflow reads `apps.json` at runtime and picks
+up the new app on its next run. No trigger workflow, no dispatch token, no code change. Each key:
 
-- The slug selects the app's `/reviews` secrets, names its state folder (`state/<slug>/`), and is the
-  `?app=` value in the dashboard link — it must match the Infisical project slug **exactly**.
-- To stop syncing an app, remove its slug from the list; its `state/<slug>/` folder stays untouched.
+- **`appcode`** — a short id **you choose**. It names the R2 data file (`<appcode>.json`), the
+  `?app=<appcode>` dashboard link, and the state folder (`state/<appcode>/`). Keep it stable once set.
+  Use the platform code(s) as the appcode:
+
+  - **Cross-platform (e.g. Flutter — one app on both stores):** the app has a **separate code per
+    platform**, so join the two — `<android_code>_<ios_code>` — e.g. `D1AS_D1IS` (`D1AS` = Android,
+    `D1IS` = iOS).
+
+  - **Native single-platform (Android-only or iOS-only):** use that platform's single code directly,
+    e.g. `D1AS` or `D1IS` — no underscore.
+
+- **`infisical_slug`** — the app's **Infisical project slug**, used to fetch its `/reviews` secrets.
+  It must match the Infisical Settings value **exactly**.
+  
+- **`appname`** — the display name shown on the dashboard and in the Slack notification.
+
+To stop syncing an app, remove its object; its `state/<appcode>/` folder stays untouched.
 
 ## Step 4 — First Run and Verification
 
 1. Run it manually without waiting for the cron: `store-reviews` → **Actions → Review Sync (Central)
-   → Run workflow**, and set **project_slug** to your app's slug (leave it empty to sync every app in
+   → Run workflow**, and set **app_code** to your app's `appcode` (leave it empty to sync every app in
    `apps.json`).
 2. Watch the run in `store-reviews` → Actions. Expect:
    - **Fetch review secrets from Infisical** turns the `/reviews` keys into environment variables.
-   - **Sync Reviews and Publish Dashboard Data** fetches the newest reviews (up to 5 per platform on
-     the first run), generates suggestions, and uploads `<project_slug>.json` to R2.
-   - The Slack channel receives one message with the dashboard link.
-   - **Commit Updated State** creates and pushes `state/<project_slug>/` automatically.
-3. Open the dashboard link (`<dashboard>/?app=<project_slug>`) — the reviews render with their
-   suggested replies. Click **Reply** on one (the first time asks for a token, see
-   [GitHub Token](#github-token)). Confirm the reply appears on the store.
+   - **Sync Reviews and Publish Dashboard Data** runs. On this **first (baseline) run it records
+     existing reviews as seen and publishes none** — later runs pick up only reviews that arrive after
+     connection, generate suggestions, and upload `<appcode>.json` to R2.
+   - **Commit Updated State** creates and pushes `state/<appcode>/` automatically. (No Slack message
+     is sent on the baseline run, since no new reviews are published.)
+3. Confirm the run succeeded and `state/<appcode>/` was committed. The dashboard for a freshly
+   connected app shows **no reviews** until new ones arrive — that is expected. When the first new
+   review comes in, the next sync posts a Slack notification and it appears on the dashboard, where
+   you click **Reply** (the first time asks for a token, see [GitHub Token](#github-token)).
 
 From now on the schedule handles everything; no manual state setup is ever needed.
 
@@ -346,18 +367,20 @@ approves it in GitHub — a reply will fail until then.
 ## Review Sync
 
 Workflow 1 — `.github/workflows/review-sync.yml` (**Review Sync (Central)**). One scheduled run
-fans out over every slug in [`apps.json`](apps.json) and processes each app as a parallel matrix job.
+fans out over every app in [`apps.json`](apps.json) and processes each as a parallel matrix job.
 For each app it:
 
-1. Fetches the app's `/reviews` secrets from Infisical (Production).
-2. Fetches the newest reviews from each configured platform (up to 5 per platform on the first run).
+1. Fetches the app's `/reviews` secrets from Infisical (Production), using its `infisical_slug`.
+2. Fetches the newest reviews from each configured platform. On the app's **first (baseline) run** it
+   records all existing reviews as already-seen and posts nothing; every later run picks up only
+   reviews that arrived since.
 3. Generates an AI suggestion for each new review (see [AI Reply Generation](#ai-reply-generation)).
-4. Uploads the app's pending-review file `<project_slug>.json` to Cloudflare R2.
+4. Uploads the app's pending-review file `<appcode>.json` to Cloudflare R2.
 5. Posts one Slack notification to the app's channel.
-6. Commits the updated state to `state/<project_slug>/`.
+6. Commits the updated state to `state/<appcode>/`.
 
 A platform whose keys are absent from `/reviews` is skipped (logs "not configured"). Runs can also be
-triggered manually via **Run workflow** — with a `project_slug` for one app, or empty for all. See
+triggered manually via **Run workflow** — with an `app_code` for one app, or empty for all. See
 [Schedule](#schedule).
 
 ## AI Reply Generation
@@ -373,11 +396,13 @@ sync itself is unaffected.
 ## Dashboard
 
 The web dashboard lives in **`dashboard/`** (Vite + React, deployed to **Cloudflare Pages**
-through the central `Lascade-Co/actions` repository). It reads each app's pending-review file (`<project_slug>.json`) from
-Cloudflare R2 and renders the reviews with their suggested replies. A developer edits or rewrites a
-reply and clicks **Reply**, which triggers the [Reply Workflow](#reply-workflow) via the GitHub API
-using their browser-stored [GitHub token](#github-token). The dashboard link used in Slack comes from
-the `SITE_BASE_URL` secret, and the app is selected by the `?app=<project_slug>` query parameter.
+through the central `Lascade-Co/actions` repository). It reads each app's pending-review file (`<appcode>.json`) from
+Cloudflare R2 and renders the reviews with their suggested replies (showing the app's `appname` and
+`appcode`). A developer edits or rewrites a reply and clicks **Reply**, which triggers the
+[Reply Workflow](#reply-workflow) via the GitHub API using their browser-stored
+[GitHub token](#github-token) — passing the `appcode`, which the reply workflow maps back to the
+`infisical_slug` via apps.json. The dashboard link used in Slack comes from the `SITE_BASE_URL`
+secret, and the app is selected by the `?app=<appcode>` query parameter.
 
 Because the dashboard fetches its data in the browser, the R2 bucket must allow cross-origin GET
 requests from the dashboard's origin (a **CORS policy**).
@@ -392,9 +417,13 @@ have **Actions: Read and write** on `store-reviews` (see [GitHub Token](#github-
 
 ## Review State and Deduplication
 
-Per-app state is committed to this repo under `state/<project_slug>/`; the review content itself lives
+Per-app state is committed to this repo under `state/<appcode>/`; the review content itself lives
 in the per-app JSON file on Cloudflare R2 (git state deliberately stores no review text).
 
+- **`baselined`** is set on the app's first run: every review that existed at connection time is
+  recorded in `posted_ids` and nothing is posted, so only reviews arriving afterwards are ever shown.
+  The flag is set even when the app had zero reviews at connection, so the first real review is never
+  missed.
 - **`posted_ids`** is the permanent deduplication record — a review whose id is in `posted_ids` is
   never shown again, even if it is later edited or re-appears.
 - **Unreplied reviews** remain on the dashboard for **7 days**, then expire.
@@ -407,7 +436,7 @@ in the per-app JSON file on Cloudflare R2 (git state deliberately stores no revi
 
 One central cron at **~06:00 IST** (`cron: "30 0 * * *"` in UTC) runs every app in `apps.json` in
 parallel (one matrix job per app). Manual runs are available anytime via **Run workflow** (set
-`project_slug` for one app, or leave it empty for all). GitHub may delay a scheduled run by a few
+`app_code` for one app, or leave it empty for all). GitHub may delay a scheduled run by a few
 minutes. A new review appears on the dashboard after the next run (scheduled or manual); replies you
 send are published within about a minute, independent of the schedule.
 
@@ -434,11 +463,12 @@ All secrets live on this central repo — there is no per-app dispatch token (th
 | Symptom | Cause / fix |
 |---|---|
 | `Error: Missing universal auth credentials` in the Infisical step | The `INFISICAL_CLIENT_ID/SECRET/DOMAIN` secrets are missing/empty on `store-reviews`. Ask the backend team to (re-)provision them. |
-| Infisical step fails with project not found | The slug in `apps.json` (or the manual `project_slug` input) doesn't match the Infisical **project slug** (the Settings value, not the display name). |
+| Infisical step fails with project not found | The `infisical_slug` in `apps.json` doesn't match the Infisical **project slug** (the Settings value, not the display name). |
 | A provider logs "not configured for this app; skipping" | That platform's keys are absent from `/reviews`. Intentional for single-platform apps; otherwise add the missing keys. |
 | Google Play returns 0 reviews | Normal: the Play API only returns reviews that have text from the last 7 days, production track only. |
-| A new app never runs | Its slug isn't in `apps.json`, or the JSON is malformed (the **Resolve app list** job logs the parsed slugs). |
-| Dashboard shows no reviews / a CORS error in the console | The R2 bucket needs a CORS policy allowing GET from the dashboard's origin, OR the sync hasn't run yet for this app, OR the `?app=` slug is wrong. The console `[reviews]` logs pinpoint which. |
+| A new app never runs | Its object isn't in `apps.json`, or the JSON is malformed (the **Resolve app list** job logs the parsed apps). |
+| Reply run fails with "No app in apps.json has appcode …" | The dashboard's `appcode` has no matching object in `apps.json` on `main`. Add it or fix the appcode. |
+| Dashboard shows no reviews / a CORS error in the console | The R2 bucket needs a CORS policy allowing GET from the dashboard's origin, OR the sync hasn't run yet for this app, OR the `?app=` appcode is wrong. The console `[reviews]` logs pinpoint which. |
 | Review shown without a Suggested Reply | `CODEX_AUTH_JSON_BASE_64` missing/stale, or the Codex call failed that run — the sync is unaffected. It won't get a suggestion later; write the reply manually. |
 | Reply button → "token rejected" | The token is expired, lacks Actions: Read and write on `store-reviews`, or is pending org approval. |
 | Reply button → 404 | `reply-review.yml` must be on `main`, and the token's repository access must include `store-reviews`. |
@@ -449,8 +479,9 @@ All secrets live on this central repo — there is no per-app dispatch token (th
 ```
 .github/workflows/review-sync.yml    Workflow 1: cron fans out over apps.json, syncs each app, publishes to R2, notifies Slack
 .github/workflows/reply-review.yml   Workflow 2: publish a dashboard-approved reply to the store
-apps.json                            The app list — Infisical project slugs the scheduled sync runs for
+apps.json                            The app list — one object per app { appname, appcode, infisical_slug }
+dashboard/                           Web dashboard (Vite + React; deployed to Cloudflare Pages)
 scripts/                             Python sync + reply logic (providers + shared helpers)
-state/<project_slug>/                Per-app sync state (committed by the workflows)
+state/<appcode>/                     Per-app sync state (committed by the workflows)
 tests/                               Unit tests (run locally via tests/run_all.py before pushing)
 ```

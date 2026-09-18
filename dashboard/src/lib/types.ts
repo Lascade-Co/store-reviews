@@ -16,7 +16,8 @@ export interface Review {
 }
 
 export interface ReviewPayload {
-  project_slug: string
+  app_code: string
+  app_name: string
   generated_at: string
   reviews: Review[]
 }

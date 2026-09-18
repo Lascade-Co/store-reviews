@@ -1,16 +1,18 @@
 name: Reply to Review
-run-name: "reply · ${{ inputs.project_slug }} · ${{ inputs.platform }} · ${{ inputs.review_id }}"
+run-name: "reply · ${{ inputs.app_code }} · ${{ inputs.platform }} · ${{ inputs.review_id }}"
 
 # Workflow 2 of the web dashboard: dispatched from the browser (fine-grained
-# PAT with Actions read/write on this repo) when a user clicks Post. Sends the
-# reply to the store, updates state, and rebuilds the app's pending-list file
-# on R2 so the dashboard stops showing the review.
+# PAT with Actions read/write on this repo) when a user clicks Post. The
+# dashboard sends the app's appcode; this workflow resolves the matching
+# infisical_slug/appname from apps.json, sends the reply to the store, updates
+# state, and rebuilds the app's pending-list file on R2 so the dashboard stops
+# showing the review.
 
 on:
   workflow_dispatch:
     inputs:
-      project_slug:
-        description: "Infisical project slug of the app"
+      app_code:
+        description: "The app's appcode (from apps.json)"
         required: true
         type: string
       platform:
@@ -30,7 +32,7 @@ on:
 # Shares the app's group with the sync workflow so state and the data file
 # never race; different apps still run in parallel.
 concurrency:
-  group: review-sync-${{ inputs.project_slug }}
+  group: review-sync-${{ inputs.app_code }}
   cancel-in-progress: false
 
 jobs:
@@ -41,12 +43,25 @@ jobs:
     permissions:
       contents: write
     env:
-      PROJECT_SLUG: ${{ inputs.project_slug }}
+      APP_CODE: ${{ inputs.app_code }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
+      - name: Resolve app from apps.json
+        # The dashboard only knows the appcode; look up the matching Infisical
+        # slug (to fetch secrets) and display name from apps.json.
+        id: app
+        run: |
+          set -euo pipefail
+          obj="$(jq -c --arg c "${APP_CODE}" '.apps[] | select(.appcode == $c)' apps.json)"
+          if [ -z "${obj}" ]; then
+            echo "No app in apps.json has appcode '${APP_CODE}'." >&2
+            exit 1
+          fi
+          echo "infisical_slug=$(echo "${obj}" | jq -r '.infisical_slug')" >> "$GITHUB_OUTPUT"
+          echo "appname=$(echo "${obj}" | jq -r '.appname')" >> "$GITHUB_OUTPUT"
       - name: Setup Python
         uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
         with:
@@ -62,13 +77,14 @@ jobs:
           method: universal
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          project-slug: ${{ inputs.project_slug }}
+          project-slug: ${{ steps.app.outputs.infisical_slug }}
           env-slug: "prod"
           domain: ${{ secrets.INFISICAL_DOMAIN }}
           secret-path: /reviews
           export-type: env
       - name: Send Reply to Store
         env:
+          APP_NAME: ${{ steps.app.outputs.appname }}
           PLATFORM: ${{ inputs.platform }}
           REVIEW_ID: ${{ inputs.review_id }}
           REPLY_TEXT: ${{ inputs.reply_text }}
@@ -84,7 +100,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          APP_DIR="state/${PROJECT_SLUG}"
+          APP_DIR="state/${APP_CODE}"
           git add "${APP_DIR}" 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No state changes."
@@ -94,7 +110,7 @@ jobs:
           merge_remote_state() {
             provider="$1"
             local_file="${APP_DIR}/${provider}.json"
-            remote_file="/tmp/remote_${PROJECT_SLUG}_${provider}.json"
+            remote_file="/tmp/remote_${APP_CODE}_${provider}.json"
             [ -f "${local_file}" ] || return 0
             if git show "origin/${GITHUB_REF_NAME}:${local_file}" > "${remote_file}" 2>/dev/null; then
               python scripts/merge_state.py "${remote_file}" "${local_file}"
@@ -113,7 +129,7 @@ jobs:
               echo "Remote already contains the state changes."
               exit 0
             fi
-            git commit -m "Record dashboard reply (${PROJECT_SLUG})"
+            git commit -m "Record dashboard reply (${APP_CODE})"
             if git push; then
               echo "State pushed on attempt ${attempt}/4."
               exit 0

@@ -18,7 +18,7 @@ def _state_file(provider: str) -> Path:
     """
     Returns the JSON state file for an app + provider.
 
-    The app is taken from the PROJECT_SLUG environment variable so multiple apps
+    The app is taken from the APP_CODE environment variable so multiple apps
     can share this code without sharing state. Each app gets its own folder
     holding one file per provider:
 
@@ -26,16 +26,16 @@ def _state_file(provider: str) -> Path:
         state/airlines70/playstore.json
 
     Only the providers an app actually uses are created (an Android-only app
-    only ever writes playstore.json). When PROJECT_SLUG is unset the legacy
+    only ever writes playstore.json). When APP_CODE is unset the legacy
     single-app names are used, keeping older runs and tests working:
 
         state/appstore_reviews.json
         state/playstore_reviews.json
     """
 
-    project_slug = os.environ.get("PROJECT_SLUG", "").strip()
-    if project_slug:
-        app_dir = STATE_DIR / project_slug
+    app_code = os.environ.get("APP_CODE", "").strip()
+    if app_code:
+        app_dir = STATE_DIR / app_code
         app_dir.mkdir(parents=True, exist_ok=True)
         return app_dir / f"{provider}.json"
 

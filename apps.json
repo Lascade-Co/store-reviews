@@ -1,6 +1,14 @@
 {
-  "slugs": [
-    "airlines70",
-    "flight_deals"
+  "apps": [
+    {
+      "appname": "Airlines70",
+      "appcode": "D1AS_D1IS",
+      "infisical_slug": "airlines70"
+    },
+    {
+      "appname": "Flight Deals",
+      "appcode": "M4AS_M4IS",
+      "infisical_slug": "flight_deals"
+    }
   ]
 }

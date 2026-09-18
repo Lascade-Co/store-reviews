@@ -17,7 +17,6 @@ from common.utils import request_with_retries
 
 LOG = logging.getLogger(__name__)
 APPLE_API = "https://api.appstoreconnect.apple.com/v1"
-INITIAL_SYNC_COUNT = 5
 PAGE_CAP = 25
 
 
@@ -179,11 +178,13 @@ def run_appstore_collect() -> tuple[list[dict], dict]:
     LOG.info("Generating App Store Connect JWT")
     token = generate_token()
     state = load_state("appstore")
-    initial_sync = not bool(state.get("last_review_id"))
+    # First run for this app = never baselined. On that run we record a baseline
+    # and post nothing, so only reviews that arrive after connection are shown.
+    initial_sync = not (state.get("baselined") or state.get("last_review_id"))
 
-    LOG.info("Fetching App Store reviews%s", " (initial sync)" if initial_sync else "")
+    LOG.info("Fetching App Store reviews%s", " (baseline run)" if initial_sync else "")
     if initial_sync:
-        # Only the newest page is needed to publish the first few reviews.
+        # Only the newest page is needed to establish the baseline boundary.
         reviews = fetch_reviews(token, max_pages=1)
     else:
         reviews = fetch_reviews(token, stop_at_id=state.get("last_review_id"))
@@ -194,7 +195,6 @@ def run_appstore_collect() -> tuple[list[dict], dict]:
         reviews,
         state,
         initial_sync,
-        INITIAL_SYNC_COUNT,
         _review_id,
         normalize_entry,
         "apple_reply_sent",
@@ -202,5 +202,5 @@ def run_appstore_collect() -> tuple[list[dict], dict]:
         # last_review_id boundary is safe for Apple (unlike Google).
         stop_at_boundary=True,
         suggestion_generator=_suggest_batch,
-    ) if reviews else []
+    )
     return entries, state

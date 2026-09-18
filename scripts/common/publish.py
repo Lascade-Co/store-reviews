@@ -48,9 +48,9 @@ def _r2_client():
     )
 
 
-def _object_key(slug: str) -> str:
+def _object_key(app_code: str) -> str:
     prefix = _require_env("R2_DATA_PREFIX").strip("/")
-    return f"{prefix}/{slug}.json"
+    return f"{prefix}/{app_code}.json"
 
 
 def encode_payload(payload: dict) -> str:
@@ -66,11 +66,11 @@ def decode_payload(blob: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def download_current(slug: str) -> dict | None:
+def download_current(app_code: str) -> dict | None:
     """Fetch the previous pending-list from R2, or None when absent/invalid."""
     client = _r2_client()
     try:
-        response = client.get_object(Bucket=_require_env("R2_BUCKET"), Key=_object_key(slug))
+        response = client.get_object(Bucket=_require_env("R2_BUCKET"), Key=_object_key(app_code))
     except client.exceptions.NoSuchKey:
         return None
     except Exception as exc:  # first run, missing bucket perms, etc.
@@ -79,17 +79,17 @@ def download_current(slug: str) -> dict | None:
     return decode_payload(response["Body"].read().decode("utf-8"))
 
 
-def upload(payload: dict, slug: str) -> None:
+def upload(payload: dict, app_code: str) -> None:
     client = _r2_client()
     client.put_object(
         Bucket=_require_env("R2_BUCKET"),
-        Key=_object_key(slug),
+        Key=_object_key(app_code),
         Body=encode_payload(payload).encode("utf-8"),
         ContentType="application/json; charset=utf-8",
         # The page must always see the latest upload through the fixed URL.
         CacheControl="no-cache",
     )
-    LOG.info("Uploaded dashboard data file for %s (%d pending review(s))", slug, len(payload.get("reviews", [])))
+    LOG.info("Uploaded dashboard data file for %s (%d pending review(s))", app_code, len(payload.get("reviews", [])))
 
 
 def _entry_is_pending(entry: dict, states: dict) -> bool:
@@ -107,7 +107,13 @@ def _entry_is_pending(entry: dict, states: dict) -> bool:
     return True
 
 
-def build_list(previous: dict | None, states: dict, new_entries: list[dict], slug: str) -> dict:
+def build_list(
+    previous: dict | None,
+    states: dict,
+    new_entries: list[dict],
+    app_code: str,
+    app_name: str,
+) -> dict:
     """previous non-replied entries + new reviews; state decides both."""
     reviews: list[dict] = []
     seen: set[tuple] = set()
@@ -127,10 +133,15 @@ def build_list(previous: dict | None, states: dict, new_entries: list[dict], slu
         seen.add(key)
         reviews.append(entry)
     reviews.sort(key=lambda item: item.get("reviewed_at") or "", reverse=True)
-    return {"project_slug": slug, "generated_at": now_iso(), "reviews": reviews}
+    return {
+        "app_code": app_code,
+        "app_name": app_name,
+        "generated_at": now_iso(),
+        "reviews": reviews,
+    }
 
 
-def notify_slack(new_count: int, slug: str) -> None:
+def notify_slack(new_count: int, app_code: str, app_name: str) -> None:
     """One message per run, only when new reviews arrived."""
     if new_count <= 0:
         return
@@ -139,7 +150,6 @@ def notify_slack(new_count: int, slug: str) -> None:
         LOG.warning("SITE_BASE_URL not set; skipping Slack notification")
         return
     plural = "s" if new_count != 1 else ""
-    app_name = slug.replace("_", " ").title()
     try:
         slack = SlackClient()
         # Slack trims leading/trailing whitespace/newlines, so plain "\n" padding
@@ -152,7 +162,7 @@ def notify_slack(new_count: int, slug: str) -> None:
             f"*{app_name}*\n"
             f"{new_count} new review{plural} received\n\n"
             f"Review and reply:\n"
-            f"{site}/?app={slug}\n"
+            f"{site}/?app={app_code}\n"
             f"⠀"
         )
     except Exception:
@@ -160,14 +170,14 @@ def notify_slack(new_count: int, slug: str) -> None:
         LOG.warning("Slack notification failed; dashboard data was published anyway", exc_info=True)
 
 
-def publish(slug: str, states: dict, new_entries: list[dict]) -> None:
+def publish(app_code: str, app_name: str, states: dict, new_entries: list[dict]) -> None:
     """Merge, upload, and notify. states = {"appstore": ..., "playstore": ...}."""
-    previous = download_current(slug)
-    payload = build_list(previous, states, new_entries, slug)
-    upload(payload, slug)
+    previous = download_current(app_code)
+    payload = build_list(previous, states, new_entries, app_code, app_name)
+    upload(payload, app_code)
     # Count only NEW reviews that are actually pending — i.e. shown on the
     # dashboard. A freshly-fetched review that already had a store reply is
     # recorded but filtered out of the dashboard; it must not inflate the
     # "new reviews received" number so Slack matches what the dashboard shows.
     new_pending = sum(1 for entry in new_entries if _entry_is_pending(entry, states))
-    notify_slack(new_pending, slug)
+    notify_slack(new_pending, app_code, app_name)

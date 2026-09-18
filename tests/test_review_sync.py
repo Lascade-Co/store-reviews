@@ -25,8 +25,7 @@ class BoundarySelectionTests(unittest.TestCase):
         }
 
         result = select_new_reviews(
-            reviews, state, initial_sync=False, initial_count=5,
-            review_id_getter=_id, stop_at_boundary=False,
+            reviews, state, review_id_getter=_id, stop_at_boundary=False,
         )
 
         self.assertEqual([item["id"] for item in result], ["new"])
@@ -40,39 +39,60 @@ class BoundarySelectionTests(unittest.TestCase):
         }
 
         result = select_new_reviews(
-            reviews, state, initial_sync=False, initial_count=5,
-            review_id_getter=_id, stop_at_boundary=True,
+            reviews, state, review_id_getter=_id, stop_at_boundary=True,
         )
 
         self.assertEqual([item["id"] for item in result], ["new"])
 
-    def test_initial_sync_baselines_whole_window_so_second_run_posts_only_new(self):
-        # Google (no boundary stop): initial sync publishes the newest 5 but
-        # must mark EVERY fetched id as seen, otherwise the second run would
-        # treat the rest of the 7-day window as "new" and flood the dashboard.
-        state = {"last_review_id": None, "posted_ids": [], "reviews": {}}
+    def test_first_run_baselines_and_posts_nothing_then_only_new_after(self):
+        # First run posts NOTHING — it just records every existing review as seen
+        # and marks the app baselined. Only reviews that arrive AFTER connection
+        # are posted on later runs.
+        state = {"posted_ids": [], "reviews": {}}
         window = [review(f"r{n}") for n in range(9, 0, -1)]  # r9 newest .. r1
 
         with patch("common.review_sync.save_state"):
             entries = collect_new_reviews(
-                "playstore", window, state, initial_sync=True, initial_count=5,
+                "playstore", window, state, initial_sync=True,
                 review_id_getter=_id, normalizer=lambda r, s: {"review_id": r["id"]},
-                reply_sent_key="google_reply_sent",
-                stop_at_boundary=False, baseline_all_fetched=True,
+                reply_sent_key="google_reply_sent", stop_at_boundary=False,
             )
-        self.assertEqual(len(entries), 5)  # newest 5 published
+        self.assertEqual(entries, [])  # nothing published on the baseline run
+        self.assertTrue(state["baselined"])
         self.assertEqual(set(state["posted_ids"]), {f"r{n}" for n in range(1, 10)})
 
         # Second run: window now also holds new reviews r10 and r11.
         window2 = [review(f"r{n}") for n in range(11, 0, -1)]
         with patch("common.review_sync.save_state"):
             entries2 = collect_new_reviews(
-                "playstore", window2, state, initial_sync=False, initial_count=5,
+                "playstore", window2, state, initial_sync=False,
                 review_id_getter=_id, normalizer=lambda r, s: {"review_id": r["id"]},
-                reply_sent_key="google_reply_sent",
-                stop_at_boundary=False, baseline_all_fetched=True,
+                reply_sent_key="google_reply_sent", stop_at_boundary=False,
             )
-        self.assertEqual([e["review_id"] for e in entries2], ["r10", "r11"])  # old r1-r4 never published
+        self.assertEqual([e["review_id"] for e in entries2], ["r10", "r11"])  # old r1-r9 never published
+
+    def test_first_run_with_zero_reviews_still_posts_the_first_review_later(self):
+        # App connected while it had no reviews: the baseline run sets the flag
+        # even with an empty window, so the first real review is NOT missed.
+        state = {"posted_ids": [], "reviews": {}}
+        with patch("common.review_sync.save_state"):
+            entries = collect_new_reviews(
+                "playstore", [], state, initial_sync=True,
+                review_id_getter=_id, normalizer=lambda r, s: {"review_id": r["id"]},
+                reply_sent_key="google_reply_sent", stop_at_boundary=False,
+            )
+        self.assertEqual(entries, [])
+        self.assertTrue(state["baselined"])
+        self.assertIsNone(state.get("last_review_id"))
+
+        # A review now appears; the run is incremental (baselined) and posts it.
+        with patch("common.review_sync.save_state"):
+            entries2 = collect_new_reviews(
+                "playstore", [review("r1")], state, initial_sync=False,
+                review_id_getter=_id, normalizer=lambda r, s: {"review_id": r["id"]},
+                reply_sent_key="google_reply_sent", stop_at_boundary=False,
+            )
+        self.assertEqual([e["review_id"] for e in entries2], ["r1"])
 
 
 if __name__ == "__main__":
