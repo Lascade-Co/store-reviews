@@ -85,6 +85,7 @@ jobs:
       - name: Send Reply to Store
         env:
           APP_NAME: ${{ steps.app.outputs.appname }}
+          APP_INFISICAL_SLUG: ${{ steps.app.outputs.infisical_slug }}
           PLATFORM: ${{ inputs.platform }}
           REVIEW_ID: ${{ inputs.review_id }}
           REPLY_TEXT: ${{ inputs.reply_text }}

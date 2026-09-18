@@ -67,8 +67,13 @@ def main() -> int:
     LOG.info("Reply accepted by the store; state updated")
 
     # Rebuild the pending-list so the dashboard stops showing this review.
+    app_details = {
+        "appname": app_name,
+        "appcode": app_code,
+        "infisical_slug": os.environ.get("APP_INFISICAL_SLUG", "").strip(),
+    }
     states = {"appstore": load_state("appstore"), "playstore": load_state("playstore")}
-    payload = build_list(download_current(app_code), states, [], app_code, app_name)
+    payload = build_list(download_current(app_code), states, [], app_details)
     upload(payload, app_code)
     return 0
 

@@ -15,9 +15,14 @@ export interface Review {
   reply_text: string | null
 }
 
+export interface AppDetails {
+  appname: string
+  appcode: string
+  infisical_slug: string
+}
+
 export interface ReviewPayload {
-  app_code: string
-  app_name: string
+  app_details: AppDetails
   generated_at: string
   reviews: Review[]
 }

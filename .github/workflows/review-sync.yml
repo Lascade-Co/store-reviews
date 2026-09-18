@@ -129,9 +129,12 @@ jobs:
       - name: Sync Reviews and Publish Dashboard Data
         env:
           # appcode names the R2 file, dashboard URL and state folder; appname
-          # is the display name shown on the dashboard and in the Slack message.
+          # is the display name. All three go into the R2 file's app_details so
+          # the dashboard reads them straight from the data (keyed only by
+          # appcode in the URL).
           APP_CODE: ${{ matrix.app.appcode }}
           APP_NAME: ${{ matrix.app.appname }}
+          APP_INFISICAL_SLUG: ${{ matrix.app.infisical_slug }}
           # One internal bot serves every app by default, so its token lives
           # once on this repo. An app can still override it by putting its own
           # SLACK_BOT_TOKEN in its Infisical /reviews folder: the code prefers

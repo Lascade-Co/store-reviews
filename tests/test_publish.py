@@ -24,6 +24,9 @@ def entry(platform: str, review_id: str, **overrides) -> dict:
     return base
 
 
+APP = {"appname": "App Name", "appcode": "appcode", "infisical_slug": "slug"}
+
+
 class BuildListTests(unittest.TestCase):
     def states(self, appstore_reviews=None, playstore_reviews=None) -> dict:
         return {
@@ -32,7 +35,7 @@ class BuildListTests(unittest.TestCase):
         }
 
     def test_payload_roundtrip_is_plain_json(self):
-        payload = {"app_code": "x", "app_name": "X", "reviews": [entry("appstore", "r1")]}
+        payload = {"app_details": APP, "reviews": [entry("appstore", "r1")]}
         blob = encode_payload(payload)
         self.assertIn('"reviews"', blob)  # plain, human-inspectable JSON
         self.assertEqual(decode_payload(blob), payload)
@@ -42,12 +45,12 @@ class BuildListTests(unittest.TestCase):
         previous = {"reviews": [entry("appstore", "old1")]}
         states = self.states(appstore_reviews={"old1": {}, "new1": {}})
 
-        result = build_list(previous, states, [entry("appstore", "new1")], "appcode", "App Name")
+        result = build_list(previous, states, [entry("appstore", "new1")], APP)
 
         ids = {item["review_id"] for item in result["reviews"]}
         self.assertEqual(ids, {"old1", "new1"})
-        self.assertEqual(result["app_code"], "appcode")
-        self.assertEqual(result["app_name"], "App Name")
+        self.assertEqual(result["app_details"], APP)
+        self.assertEqual(result["app_details"]["appcode"], "appcode")
 
     def test_drops_replied_and_pruned_entries(self):
         previous = {
@@ -67,7 +70,7 @@ class BuildListTests(unittest.TestCase):
             playstore_reviews={"console1": {"google_reply_sent": True}},
         )
 
-        result = build_list(previous, states, [], "appcode", "App Name")
+        result = build_list(previous, states, [], APP)
 
         ids = {item["review_id"] for item in result["reviews"]}
         self.assertEqual(ids, {"keep1"})
@@ -80,7 +83,7 @@ class BuildListTests(unittest.TestCase):
             entry("appstore", "r2", reviewed_at="2026-09-03T00:00:00+00:00"),
         ]
 
-        result = build_list(previous, states, new, "appcode", "App Name")
+        result = build_list(previous, states, new, APP)
 
         self.assertEqual([item["review_id"] for item in result["reviews"]], ["r2", "r1"])
 
@@ -92,7 +95,7 @@ class PublishNotifyTests(unittest.TestCase):
         with patch("common.publish.download_current", return_value=None), patch(
             "common.publish.upload"
         ), patch("common.publish.notify_slack") as notify:
-            publish("appcode", "App Name", states, new_entries)
+            publish(APP, states, new_entries)
         return notify
 
     def test_notify_counts_only_pending_new_reviews(self):
@@ -111,7 +114,7 @@ class PublishNotifyTests(unittest.TestCase):
 
         notify = self._publish(new_entries, states)
 
-        notify.assert_called_once_with(1, "appcode", "App Name")  # not 2 — the replied one is excluded
+        notify.assert_called_once_with(1, APP)  # not 2 — the replied one is excluded
 
     def test_notify_counts_all_when_every_new_review_is_pending(self):
         new_entries = [entry("appstore", "n1"), entry("playstore", "n2")]
@@ -122,7 +125,7 @@ class PublishNotifyTests(unittest.TestCase):
 
         notify = self._publish(new_entries, states)
 
-        notify.assert_called_once_with(2, "appcode", "App Name")
+        notify.assert_called_once_with(2, APP)
 
 
 class CollectNewReviewsTests(unittest.TestCase):

@@ -156,7 +156,7 @@ export default function App() {
     setError(null)
     try {
       const data = await fetchReviews(appCode)
-      console.info(`[app] render: ${data.reviews.length} pending review(s) for ${data.app_code}`)
+      console.info(`[app] render: ${data.reviews.length} pending review(s) for ${data.app_details?.appcode ?? appCode}`)
       setPayload(data)
       setDrafts((prev) => {
         const next = { ...prev }
@@ -256,10 +256,10 @@ export default function App() {
           <p className="text-xs font-medium text-slate-500">App</p>
           <div className="mt-1 flex flex-wrap items-center gap-3">
             <h2 className="text-xl font-bold tracking-tight text-slate-900">
-              {payload?.app_name ?? appCode.replaceAll("_", " ")}
+              {payload?.app_details?.appname ?? appCode.replaceAll("_", " ")}
             </h2>
             <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs font-semibold text-slate-600">
-              {payload?.app_code ?? appCode}
+              {payload?.app_details?.appcode ?? appCode}
             </span>
             <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
               Active

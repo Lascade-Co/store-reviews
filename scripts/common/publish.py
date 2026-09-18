@@ -111,10 +111,15 @@ def build_list(
     previous: dict | None,
     states: dict,
     new_entries: list[dict],
-    app_code: str,
-    app_name: str,
+    app_details: dict,
 ) -> dict:
-    """previous non-replied entries + new reviews; state decides both."""
+    """previous non-replied entries + new reviews; state decides both.
+
+    ``app_details`` is the app object from apps.json ({appname, appcode,
+    infisical_slug}); it is stored under "app_details" so the dashboard reads the
+    display name and code straight from the data file (keyed only by appcode in
+    the URL).
+    """
     reviews: list[dict] = []
     seen: set[tuple] = set()
     old_reviews = previous.get("reviews", []) if isinstance(previous, dict) else []
@@ -134,14 +139,13 @@ def build_list(
         reviews.append(entry)
     reviews.sort(key=lambda item: item.get("reviewed_at") or "", reverse=True)
     return {
-        "app_code": app_code,
-        "app_name": app_name,
+        "app_details": app_details,
         "generated_at": now_iso(),
         "reviews": reviews,
     }
 
 
-def notify_slack(new_count: int, app_code: str, app_name: str) -> None:
+def notify_slack(new_count: int, app_details: dict) -> None:
     """One message per run, only when new reviews arrived."""
     if new_count <= 0:
         return
@@ -149,6 +153,8 @@ def notify_slack(new_count: int, app_code: str, app_name: str) -> None:
     if not site:
         LOG.warning("SITE_BASE_URL not set; skipping Slack notification")
         return
+    app_name = app_details.get("appname") or app_details.get("appcode", "")
+    app_code = app_details.get("appcode", "")
     plural = "s" if new_count != 1 else ""
     try:
         slack = SlackClient()
@@ -170,14 +176,19 @@ def notify_slack(new_count: int, app_code: str, app_name: str) -> None:
         LOG.warning("Slack notification failed; dashboard data was published anyway", exc_info=True)
 
 
-def publish(app_code: str, app_name: str, states: dict, new_entries: list[dict]) -> None:
-    """Merge, upload, and notify. states = {"appstore": ..., "playstore": ...}."""
+def publish(app_details: dict, states: dict, new_entries: list[dict]) -> None:
+    """Merge, upload, and notify. states = {"appstore": ..., "playstore": ...}.
+
+    ``app_details`` is the app object from apps.json ({appname, appcode,
+    infisical_slug}); appcode names the R2 file and dashboard link.
+    """
+    app_code = app_details["appcode"]
     previous = download_current(app_code)
-    payload = build_list(previous, states, new_entries, app_code, app_name)
+    payload = build_list(previous, states, new_entries, app_details)
     upload(payload, app_code)
     # Count only NEW reviews that are actually pending — i.e. shown on the
     # dashboard. A freshly-fetched review that already had a store reply is
     # recorded but filtered out of the dashboard; it must not inflate the
     # "new reviews received" number so Slack matches what the dashboard shows.
     new_pending = sum(1 for entry in new_entries if _entry_is_pending(entry, states))
-    notify_slack(new_pending, app_code, app_name)
+    notify_slack(new_pending, app_details)
