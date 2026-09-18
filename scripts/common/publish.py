@@ -164,7 +164,6 @@ def notify_slack(new_count: int, app_details: dict) -> None:
         # at the top and one at the bottom give a clear gap above the bold app
         # name and below the link, framing the message.
         slack.post_review(
-            f"⠀\n"
             f"*{app_name}*\n"
             f"{new_count} new review{plural} received\n\n"
             f"Review and reply:\n"

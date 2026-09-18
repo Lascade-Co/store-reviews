@@ -29,10 +29,14 @@ on:
         required: true
         type: string
 
-# Shares the app's group with the sync workflow so state and the data file
-# never race; different apps still run in parallel.
+# Per-REVIEW group: replies to different reviews (even of the same app) run in
+# parallel and never cancel each other — GitHub keeps only one pending run per
+# group, so a per-app group would drop rapid same-app replies. State stays safe
+# because each reply touches a different review_id and the commit step reconciles
+# concurrent pushes via a JSON merge + retry. A double-click on the SAME review
+# shares the group, so the duplicate is dropped (post_reply.py also guards by hash).
 concurrency:
-  group: review-sync-${{ inputs.app_code }}
+  group: reply-${{ inputs.app_code }}-${{ inputs.review_id }}
   cancel-in-progress: false
 
 jobs:
