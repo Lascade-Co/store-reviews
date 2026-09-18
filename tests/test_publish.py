@@ -22,7 +22,7 @@ def entry(platform: str, review_id: str, **overrides) -> dict:
     }
     base.update(overrides)
     return base
-
+  
 
 APP = {"appname": "App Name", "appcode": "appcode", "infisical_slug": "slug"}
 
