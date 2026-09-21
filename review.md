@@ -92,7 +92,7 @@ App Store / Google Play
   Review Sync  ──────────────►  AI suggestion (Codex) drafted for each review
         │                       review data written to storage (Cloudflare R2)
         ▼
-  Slack notification  ──►  "N new reviews — <dashboard>/?app=<appcode>"
+  Slack notification  ──►  App Code / App Name / New Reviews: N / Review URL: <dashboard>/?app=<appcode>
         │
         ▼
   Web Dashboard  ──►  developer reviews, edits, or rewrites the reply → clicks Reply

@@ -155,20 +155,18 @@ def notify_slack(new_count: int, app_details: dict) -> None:
         return
     app_name = app_details.get("appname") or app_details.get("appcode", "")
     app_code = app_details.get("appcode", "")
-    plural = "s" if new_count != 1 else ""
     try:
         slack = SlackClient()
-        # Slack trims leading/trailing whitespace/newlines, so plain "\n" padding
-        # is dropped. U+2800 (Braille blank) is a printable Symbol — not
-        # whitespace — so it survives the trim and renders as an empty line. One
-        # at the top and one at the bottom give a clear gap above the bold app
-        # name and below the link, framing the message.
+        # Labelled fields (bold labels via *…*). Slack trims real leading/trailing
+        # whitespace, so U+2800 (Braille blank — a printable Symbol, not
+        # whitespace) is used to frame the message with a blank line top and bottom.
         slack.post_review(
-            f"*{app_name}*\n"
-            f"{new_count} new review{plural} received\n\n"
-            f"Review and reply:\n"
-            f"{site}/?app={app_code}\n"
-            f"⠀"
+            f"*App Code:* {app_code}\n"
+            f"*App Name:* {app_name}\n"
+            f"*New Reviews:* {new_count}\n"
+            f"*Review URL:* {site}/?app={app_code}\n"
+            f"⠀\n"
+
         )
     except Exception:
         # Notification is best-effort: the data file is already uploaded.
