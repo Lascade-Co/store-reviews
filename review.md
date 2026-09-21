@@ -415,6 +415,11 @@ Play), marks the review as replied in state, and rebuilds the app's R2 file so t
 dashboard. This workflow must exist on the default branch (`main`), and the developer's token must
 have **Actions: Read and write** on `store-reviews` (see [GitHub Token](#github-token)).
 
+Its concurrency group is **per review** (`reply-<appcode>-<review_id>`), so replies to different
+reviews — even of the same app — run in parallel and never cancel each other; only a double-click on
+the *same* review is de-duplicated. Concurrent state commits are reconciled by the JSON merge + retry
+in the commit step (see [Review State and Deduplication](#review-state-and-deduplication)).
+
 ## Review State and Deduplication
 
 Per-app state is committed to this repo under `state/<appcode>/`; the review content itself lives
