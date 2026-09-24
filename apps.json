@@ -14,6 +14,11 @@
       "appname": "Flights70",
       "appcode": "D1AF",
       "infisical_slug": "d1_android_flight"
+    },
+    {
+      "appname": "Hotels70",
+      "appcode": "D1AH",
+      "infisical_slug": "d1_android_hotel"
     }
   ]
 }
