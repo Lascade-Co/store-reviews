@@ -9,6 +9,11 @@
       "appname": "Flight Deals",
       "appcode": "M4AS_M4IS",
       "infisical_slug": "flight_deals"
+    },
+    {
+      "appname": "Flights70",
+      "appcode": "D1AF",
+      "infisical_slug": "d1_android_flight"
     }
   ]
 }
