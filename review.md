@@ -224,7 +224,7 @@ Production
 | `APPSTORE_ISSUER_ID` | Issuer UUID from the Integrations page | iOS |
 | `APPSTORE_APPLE_ID` | Numeric Apple app ID | iOS |
 | `GOOGLE_PLAY_PACKAGE_NAME` | e.g. `com.lascade.myapp` | Android |
-| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Raw service-account JSON (**not** base64) | Android |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | The service-account JSON, **base64-encoded** (`base64 -w0 key.json`) | Android |
 | `SLACK_CHANNEL_ID` | The channel ID from [Step 1](#step-1--slack-channel) | both |
 
 For an iOS-only or Android-only app, add only that platform's secrets plus `SLACK_CHANNEL_ID`.
@@ -322,7 +322,7 @@ From now on the schedule handles everything; no manual state setup is ever neede
 6. Open the App permissions tab → Add app → select the app. Skipping this step is the #1 mistake — every API call then fails with 403 PERMISSION_DENIED.
 7. On that app tick BOTH permissions: "View app information (read-only)" and "Reply to reviews".
 8. Send invite. Google may take up to 24 hours to activate the access — if a run still fails with 403, wait and retry (making any trivial edit in Play Console and saving speeds it up).
-9. Paste the downloaded file's entire raw contents (not base64) → GOOGLE_PLAY_SERVICE_ACCOUNT_JSON.
+9. Base64-encode the downloaded file and paste that single line → GOOGLE_PLAY_SERVICE_ACCOUNT_JSON. Use `base64 -w0 key.json` (Linux) or `base64 -i key.json` (macOS). Encode the **whole** file — don't trim any fields. (Base64 keeps it one line and avoids any newline mangling of the private key; raw JSON is not accepted.)
 10. Permission changes later never require regenerating this JSON — Google checks permissions fresh on every call.
 
 

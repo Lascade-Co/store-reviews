@@ -1,15 +1,40 @@
 import unittest
 from unittest.mock import Mock, patch
 
+import base64
+import json
+
 from providers.playstore import (
     _has_developer_reply,
     _prepare_reply,
     _review_id,
+    _service_account_info,
     _timestamp_value,
     fetch_reviews,
     normalize_entry,
     reply_to_review,
 )
+
+
+class ServiceAccountInfoTests(unittest.TestCase):
+    SA = {"type": "service_account", "client_email": "bot@x.iam", "private_key": "-----KEY-----"}
+
+    def test_accepts_base64_encoded_json(self):
+        blob = base64.b64encode(json.dumps(self.SA).encode()).decode()
+        self.assertEqual(_service_account_info(blob), self.SA)
+
+    def test_accepts_base64_with_surrounding_whitespace(self):
+        blob = "  " + base64.b64encode(json.dumps(self.SA).encode()).decode() + "\n"
+        self.assertEqual(_service_account_info(blob), self.SA)
+
+    def test_rejects_raw_json(self):
+        # base64-only now: raw JSON is no longer accepted.
+        with self.assertRaises(RuntimeError):
+            _service_account_info(json.dumps(self.SA))
+
+    def test_rejects_garbage(self):
+        with self.assertRaises(RuntimeError):
+            _service_account_info("not json and not base64!!")
 
 
 def review(review_id="play-1"):

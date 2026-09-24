@@ -5,6 +5,8 @@ entries for the app's pending-list data file. Replies are sent by the reply
 workflow via reply_to_review().
 """
 
+import base64
+import binascii
 import json
 import logging
 import os
@@ -34,14 +36,26 @@ def _package_name() -> str:
     return package_name
 
 
+def _service_account_info(raw: str) -> dict:
+    """Decode the base64-encoded service-account JSON secret.
+
+    The secret is stored base64-encoded (a single line) so the private_key's
+    newlines never get mangled passing through Infisical and the runner env.
+    """
+    try:
+        decoded = base64.b64decode(raw.strip(), validate=True).decode("utf-8")
+        return json.loads(decoded)
+    except (binascii.Error, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON must be base64-encoded service-account JSON"
+        ) from exc
+
+
 def _credentials() -> service_account.Credentials:
     raw_json = os.environ.get("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", "")
-    if not raw_json:
+    if not raw_json.strip():
         raise RuntimeError("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is required")
-    try:
-        info = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is not valid JSON") from exc
+    info = _service_account_info(raw_json)
     if not isinstance(info, dict):
         raise RuntimeError("GOOGLE_PLAY_SERVICE_ACCOUNT_JSON must contain a JSON object")
     try:
