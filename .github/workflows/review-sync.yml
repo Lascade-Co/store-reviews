@@ -162,39 +162,30 @@ jobs:
           if-no-files-found: warn
 
   commit-state:
-    # One commit job per app (mirrors the sync matrix). max-parallel: 1 pushes
-    # them one at a time so state commits never race each other on main; the
-    # per-attempt fetch+merge+retry below still reconciles against reply runs.
-    name: Commit state · ${{ matrix.app.appcode }}
+    # ONE commit job for the whole run (not one per app). It downloads every
+    # app's state artifact, reconstructs each state/<appcode>/ folder, merges +
+    # prunes them all, and does a single commit + push. This keeps the job count
+    # and wall-clock flat as apps grow (vs a serialized per-app commit matrix).
+    # No concurrency group: the fetch+merge+retry below already reconciles a
+    # concurrent reply run or an overlapping sync run.
+    name: Commit all state
     needs: [set-matrix, sync]
     if: ${{ always() && needs.set-matrix.result == 'success' }}
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        app: ${{ fromJson(needs.set-matrix.outputs.apps) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: write
-    # Shared per-app group again: a state commit and a reply for the same app
-    # do not overlap.
-    concurrency:
-      group: review-sync-${{ matrix.app.appcode }}
-      cancel-in-progress: false
-    env:
-      APP_CODE: ${{ matrix.app.appcode }}
     steps:
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
-      - name: Download State
+      - name: Download all app state artifacts
         if: always()
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.app.appcode }}-state
-          path: state/${{ matrix.app.appcode }}
+          # No name -> all artifacts, each under /tmp/state-artifacts/<appcode>-state/
+          path: /tmp/state-artifacts
         continue-on-error: true
       - name: Commit Updated State
         run: |
@@ -202,52 +193,85 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          APP_DIR="state/${APP_CODE}"
+          # Reconstruct each app's just-synced state from its artifact. The
+          # artifact "<appcode>-state" was uploaded from state/<appcode>/, so its
+          # files (appstore.json/playstore.json) sit at the artifact root; copy
+          # them back into state/<appcode>/. Record which appcodes we touched.
+          shopt -s nullglob
+          APPCODES=()
+          for dir in /tmp/state-artifacts/*-state; do
+            appcode="$(basename "${dir}")"; appcode="${appcode%-state}"
+            mkdir -p "state/${appcode}"
+            cp -a "${dir}/." "state/${appcode}/"
+            APPCODES+=("${appcode}")
+          done
+          if [ ${#APPCODES[@]} -eq 0 ]; then
+            echo "No state artifacts downloaded; nothing to commit."
+            exit 0
+          fi
 
-          # Detect whether this run produced any state change at all. Add the
-          # whole per-app folder so single-platform apps (only one provider
-          # file present) still stage cleanly.
-          git add "${APP_DIR}" 2>/dev/null || true
+          for appcode in "${APPCODES[@]}"; do
+            git add "state/${appcode}" 2>/dev/null || true
+          done
           if git diff --cached --quiet; then
             echo "No state changes."
             exit 0
           fi
 
-          # Reconcile this app's remote JSON into the just-synced local JSON.
-          # merge_state.py merges in JSON space (newest reply timestamp with its
-          # matching hash, reply flags). This is why we do NOT use
-          # `git pull --rebase`: rebasing these files would only produce
-          # conflicts a line-based merge cannot resolve.
+          # Reconcile each app's remote JSON into its just-synced local JSON.
+          # merge_state.py merges in JSON space (newest reply timestamp + hash,
+          # reply flags) — we do NOT git-rebase these files. Prune AFTER the merge
+          # so the union can't resurrect pruned entries. A single commit + push
+          # covers every app; the retry rebuilds on the newest remote if a
+          # concurrent run (e.g. a reply) advanced the branch.
+          #
+          # Per-app failures are ISOLATED: if merging/pruning one app throws
+          # (e.g. a corrupt state file), that app is warned and dropped (its dir
+          # reverted to the committed version) and every other app still commits.
+          # So one bad app never blocks the whole run.
           merge_remote_state() {
-            provider="$1"
-            local_file="${APP_DIR}/${provider}.json"
-            remote_file="/tmp/remote_${APP_CODE}_${provider}.json"
+            local appcode="$1" provider="$2"
+            local local_file="state/${appcode}/${provider}.json"
+            local remote_file="/tmp/remote_${appcode}_${provider}.json"
             [ -f "${local_file}" ] || return 0
             if git show "origin/${GITHUB_REF_NAME}:${local_file}" > "${remote_file}" 2>/dev/null; then
-              python scripts/merge_state.py "${remote_file}" "${local_file}"
+              python scripts/merge_state.py "${remote_file}" "${local_file}" || return 1
             fi
+            return 0
           }
 
-          # Refresh from the latest remote, reconcile, prune, commit, and push on
-          # every attempt. Concurrent runs (this app queued, or a reply run) can
-          # advance the branch between our fetch and push, so a rejected push is
-          # retried up to 4 times, each time rebuilding the commit on the newest remote.
+          process_app() {
+            local appcode="$1"
+            merge_remote_state "${appcode}" appstore || return 1
+            merge_remote_state "${appcode}" playstore || return 1
+            python scripts/prune_state.py "state/${appcode}/appstore.json" || return 1
+            python scripts/prune_state.py "state/${appcode}/playstore.json" || return 1
+            return 0
+          }
+
+          FAILED=""
           for attempt in 1 2 3 4; do
             git fetch origin "${GITHUB_REF_NAME}"
-            merge_remote_state appstore
-            merge_remote_state playstore
-            # Prune AFTER the merge (before add) so the union can't resurrect pruned entries.
-            python scripts/prune_state.py "${APP_DIR}/appstore.json"
-            python scripts/prune_state.py "${APP_DIR}/playstore.json"
+            for appcode in "${APPCODES[@]}"; do
+              case " ${FAILED} " in *" ${appcode} "*) continue ;; esac
+              if ! process_app "${appcode}"; then
+                echo "::warning::State processing failed for ${appcode}; excluding it from this commit (other apps still commit)."
+                git checkout "origin/${GITHUB_REF_NAME}" -- "state/${appcode}" 2>/dev/null || rm -rf "state/${appcode}"
+                FAILED="${FAILED} ${appcode}"
+              fi
+            done
             git reset --mixed "origin/${GITHUB_REF_NAME}"
-            git add "${APP_DIR}" 2>/dev/null || true
+            for appcode in "${APPCODES[@]}"; do
+              case " ${FAILED} " in *" ${appcode} "*) continue ;; esac
+              git add "state/${appcode}" 2>/dev/null || true
+            done
             if git diff --cached --quiet; then
-              echo "Remote already contains the state changes."
+              echo "No state changes to commit.${FAILED:+ (excluded:${FAILED})}"
               exit 0
             fi
-            git commit -m "Update review state (${APP_CODE})"
+            git commit -m "Update review state"
             if git push; then
-              echo "State pushed on attempt ${attempt}/4."
+              echo "State pushed on attempt ${attempt}/4.${FAILED:+ (excluded:${FAILED})}"
               exit 0
             fi
             echo "Git push rejected; another run advanced the branch. Retry ${attempt}/4."
