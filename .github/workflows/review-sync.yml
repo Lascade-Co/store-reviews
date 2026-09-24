@@ -17,8 +17,9 @@ on:
         required: false
         type: string
   schedule:
-    # 06:00 IST daily (cron is UTC; IST = UTC+5:30). Same time for every app.
-    - cron: "30 0 * * *"
+    # 02:00 IST daily (cron is UTC; IST = UTC+5:30, so 02:00 IST = 20:30 UTC the
+    # previous day). Same time for every app.
+    - cron: "30 20 * * *"
 
 jobs:
   set-matrix:

@@ -439,7 +439,7 @@ in the per-app JSON file on Cloudflare R2 (git state deliberately stores no revi
 
 ## Schedule
 
-One central cron at **~06:00 IST** (`cron: "30 0 * * *"` in UTC) runs every app in `apps.json` in
+One central cron at **~02:00 IST** (`cron: "30 20 * * *"` in UTC — 02:00 IST is 20:30 UTC) runs every app in `apps.json` in
 parallel (one matrix job per app). Manual runs are available anytime via **Run workflow** (set
 `app_code` for one app, or leave it empty for all). GitHub may delay a scheduled run by a few
 minutes. A new review appears on the dashboard after the next run (scheduled or manual); replies you
