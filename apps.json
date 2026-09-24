@@ -19,6 +19,11 @@
       "appname": "Hotels70",
       "appcode": "D1AH",
       "infisical_slug": "d1_android_hotel"
+    },
+    {
+      "appname": "Rent80",
+      "appcode": "D1AC",
+      "infisical_slug": "d1_android_car"
     }
   ]
 }
