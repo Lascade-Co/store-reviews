@@ -80,24 +80,22 @@ export function clearToken(): void {
 
 export class AuthError extends Error {}
 
-/**
- * Trigger the reply workflow. GitHub returns 204 on success — the workflow
- * then sends the reply to the store and removes the review from the data file.
- */
-export async function dispatchReply(input: {
-  app_code: string
+export interface ReplyItem {
   platform: Platform
   review_id: string
   reply_text: string
-}): Promise<void> {
+}
+
+/**
+ * Fire the reply workflow with the given inputs and handle the HTTP result.
+ * GitHub returns 204 on success — the workflow then sends the reply(ies) to the
+ * store and rebuilds the app's data file.
+ */
+async function dispatchWorkflow(inputs: Record<string, string>, label: string): Promise<void> {
   const token = getToken()
   if (!token) throw new AuthError("No access token saved")
 
-  console.info(`[reply] dispatching ${WORKFLOW}@${REF} on ${OWNER}/${REPO}`, {
-    platform: input.platform,
-    review_id: input.review_id,
-    reply_length: input.reply_text.length,
-  })
+  console.info(`[reply] dispatching ${WORKFLOW}@${REF} on ${OWNER}/${REPO} (${label})`)
   const res = await fetch(
     `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW}/dispatches`,
     {
@@ -107,7 +105,7 @@ export async function dispatchReply(input: {
         Authorization: `Bearer ${token}`,
         "X-GitHub-Api-Version": "2022-11-28",
       },
-      body: JSON.stringify({ ref: REF, inputs: input }),
+      body: JSON.stringify({ ref: REF, inputs }),
     },
   )
 
@@ -127,7 +125,36 @@ export async function dispatchReply(input: {
     console.error(`[reply] 404 — GitHub can't see ${WORKFLOW} on branch '${REF}' of ${OWNER}/${REPO}. Causes: reply workflow not merged to the default branch yet, OR the token's repository access doesn't include this repo (fine-grained tokens get 404, not 403, for repos they can't see).`)
   }
   if (res.status === 422) {
-    console.error("[reply] 422 — the workflow rejected the inputs (name mismatch or missing input). Compare the dispatched inputs above with reply-review.yml's inputs.")
+    console.error("[reply] 422 — the workflow rejected the inputs (name mismatch or missing input). Compare the dispatched inputs with reply-review.yml's inputs.")
   }
   throw new Error(`Dispatch failed (HTTP ${res.status}) ${detail.slice(0, 200)}`)
+}
+
+/** Send one reply (single mode). */
+export function dispatchReply(input: {
+  app_code: string
+  platform: Platform
+  review_id: string
+  reply_text: string
+}): Promise<void> {
+  return dispatchWorkflow(
+    {
+      app_code: input.app_code,
+      platform: input.platform,
+      review_id: input.review_id,
+      reply_text: input.reply_text,
+    },
+    `single ${input.platform}/${input.review_id}`,
+  )
+}
+
+/**
+ * Send every reply in one workflow run (batch mode). The workflow detects batch
+ * mode from a non-empty `replies` array, so no `reply_all` flag is needed here.
+ */
+export function dispatchReplyAll(app_code: string, replies: ReplyItem[]): Promise<void> {
+  return dispatchWorkflow(
+    { app_code, replies: JSON.stringify(replies) },
+    `batch ${replies.length} repl${replies.length === 1 ? "y" : "ies"}`,
+  )
 }

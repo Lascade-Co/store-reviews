@@ -1,12 +1,15 @@
 name: Reply to Review
-run-name: "reply · ${{ inputs.app_code }} · ${{ inputs.platform }} · ${{ inputs.review_id }}"
+run-name: "reply · ${{ inputs.app_code }} · ${{ inputs.review_id || 'ALL' }}"
 
 # Workflow 2 of the web dashboard: dispatched from the browser (fine-grained
-# PAT with Actions read/write on this repo) when a user clicks Post. The
-# dashboard sends the app's appcode; this workflow resolves the matching
-# infisical_slug/appname from apps.json, sends the reply to the store, updates
-# state, and rebuilds the app's pending-list file on R2 so the dashboard stops
-# showing the review.
+# PAT with Actions read/write on this repo) when a user clicks Reply / Send All.
+# Two modes:
+#   single (reply_all=false): platform + review_id + reply_text — one reply.
+#   batch  (reply_all=true):  replies = JSON list of {platform, review_id,
+#                             reply_text} — every reply is sent in ONE run.
+# Either way it resolves the app's infisical_slug/appname from apps.json, sends
+# the reply(ies) to the store, updates state, and rebuilds the app's R2 file so
+# the replied reviews stop showing on the dashboard.
 
 on:
   workflow_dispatch:
@@ -15,28 +18,36 @@ on:
         description: "The app's appcode (from apps.json)"
         required: true
         type: string
+      reply_all:
+        description: "Send every reply in `replies` (batch) instead of a single one"
+        required: false
+        type: boolean
+        default: false
+      replies:
+        description: "Batch mode: JSON array of {platform, review_id, reply_text}"
+        required: false
+        type: string
       platform:
-        description: "Store to reply on"
-        required: true
-        type: choice
-        options: [appstore, playstore]
+        description: "Single mode: store to reply on (appstore or playstore)"
+        required: false
+        type: string
       review_id:
-        description: "Store review id"
-        required: true
+        description: "Single mode: store review id"
+        required: false
         type: string
       reply_text:
-        description: "The reply to publish"
-        required: true
+        description: "Single mode: the reply to publish"
+        required: false
         type: string
 
-# Per-REVIEW group: replies to different reviews (even of the same app) run in
-# parallel and never cancel each other — GitHub keeps only one pending run per
-# group, so a per-app group would drop rapid same-app replies. State stays safe
-# because each reply touches a different review_id and the commit step reconciles
-# concurrent pushes via a JSON merge + retry. A double-click on the SAME review
-# shares the group, so the duplicate is dropped (post_reply.py also guards by hash).
+# Single mode uses a per-REVIEW group so replies to different reviews run in
+# parallel and never cancel each other (GitHub keeps only one pending run per
+# group). Batch mode has no single review_id, so it falls back to a per-app
+# "all" group. State stays safe either way: the commit step reconciles
+# concurrent pushes via a JSON merge + retry, and post_reply.py guards each
+# reply by hash. review_id is empty in batch mode -> group ...-all.
 concurrency:
-  group: reply-${{ inputs.app_code }}-${{ inputs.review_id }}
+  group: reply-${{ inputs.app_code }}-${{ inputs.review_id || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -90,6 +101,8 @@ jobs:
         env:
           APP_NAME: ${{ steps.app.outputs.appname }}
           APP_INFISICAL_SLUG: ${{ steps.app.outputs.infisical_slug }}
+          REPLY_ALL: ${{ inputs.reply_all }}
+          REPLIES: ${{ inputs.replies }}
           PLATFORM: ${{ inputs.platform }}
           REVIEW_ID: ${{ inputs.review_id }}
           REPLY_TEXT: ${{ inputs.reply_text }}

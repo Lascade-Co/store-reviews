@@ -133,13 +133,17 @@ Once an app is connected, the routine for handling a review is:
 3. The developer **opens the dashboard** from that link.
 4. The developer **reads the AI-suggested reply**.
 5. The developer **edits it** if needed (or writes a new one).
-6. The developer clicks **Reply**.
-7. The system **publishes the reply** to the App Store or Google Play.
-8. The review **disappears from the dashboard** once the reply is sent successfully.
+6. The developer clicks **Reply** (or **Send All** to publish every drafted reply for the app at once).
+7. The system **publishes the reply/replies** to the App Store or Google Play.
+8. The replied reviews **disappear from the dashboard** once sent successfully.
 
-**Sending a reply needs a GitHub token.** The first time you click **Reply**, the dashboard asks for
-a personal token, which is stored only in *your* browser. You create it once. → See
-[GitHub Token](#github-token).
+**Send All** sends every review that currently has a (edited or suggested) draft in a single
+workflow run — handy after reviewing a batch. Each reply is still sent independently, so one failure
+doesn't block the others.
+
+**Sending a reply needs a GitHub token.** The first time you click **Reply** or **Send All**, the
+dashboard asks for a personal token, which is stored only in *your* browser. You create it once. →
+See [GitHub Token](#github-token).
 
 ---
 
@@ -410,10 +414,18 @@ requests from the dashboard's origin (a **CORS policy**).
 ## Reply Workflow
 
 Workflow 2 — `.github/workflows/reply-review.yml`. Triggered from the dashboard when a developer
-clicks **Reply**. It publishes the approved reply text to the correct store (App Store or Google
-Play), marks the review as replied in state, and rebuilds the app's R2 file so the review leaves the
-dashboard. This workflow must exist on the default branch (`main`), and the developer's token must
-have **Actions: Read and write** on `store-reviews` (see [GitHub Token](#github-token)).
+clicks **Reply** (one review) or **Send All** (every drafted review at once). It publishes the
+reply text to the correct store (App Store or Google Play), marks the review(s) replied in state, and
+rebuilds the app's R2 file so they leave the dashboard. This workflow must exist on the default branch
+(`main`), and the developer's token must have **Actions: Read and write** on `store-reviews` (see
+[GitHub Token](#github-token)).
+
+It has two modes, both handled in **one** run:
+- **Single** (`reply_all=false`): inputs `platform`, `review_id`, `reply_text` — one reply.
+- **Batch** (`Send All`): input `replies` = a JSON array of `{platform, review_id, reply_text}`. The
+  whole batch is sent in a single run — one checkout, one Infisical fetch, one state commit — and
+  each reply is isolated (one failure doesn't block the rest). The dashboard triggers batch mode by
+  sending a non-empty `replies` array.
 
 Its concurrency group is **per review** (`reply-<appcode>-<review_id>`), so replies to different
 reviews — even of the same app — run in parallel and never cancel each other; only a double-click on

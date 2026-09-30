@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Toaster, toast } from "@/components/ui/toast"
 import { fetchReviews } from "@/lib/data"
-import { AuthError, dispatchReply, getToken, isValidToken, saveToken, verifyToken } from "@/lib/github"
+import { AuthError, dispatchReply, dispatchReplyAll, getToken, isValidToken, saveToken, verifyToken } from "@/lib/github"
 import type { Review, ReviewPayload } from "@/lib/types"
 
 // Store reply length caps. Google Play rejects replies over ~350 chars (hard
@@ -135,6 +135,7 @@ export default function App() {
   // Per-review editable reply drafts, seeded from the AI suggestion.
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [sendingKey, setSendingKey] = useState<string | null>(null)
+  const [sendingAll, setSendingAll] = useState(false)
   const [dispatched, setDispatched] = useState<Set<string>>(new Set())
 
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
@@ -220,6 +221,50 @@ export default function App() {
     }
   }
 
+  async function sendAll() {
+    const items = (payload?.reviews ?? [])
+      .map((review) => ({ review, text: (drafts[reviewKey(review)] ?? "").trim() }))
+      .filter(({ review, text }) => text.length > 0 && !dispatched.has(reviewKey(review)))
+    if (items.length === 0) return
+    console.info(`[app] Send All clicked: ${items.length} repl${items.length === 1 ? "y" : "ies"}`)
+    if (!getToken()) {
+      console.info("[app] no saved token — showing token notice (send all)")
+      setTokenNotice("Set up an access token once to publish replies from this dashboard.")
+      return
+    }
+    setSendingAll(true)
+    try {
+      await dispatchReplyAll(
+        appCode,
+        items.map(({ review, text }) => ({
+          platform: review.platform,
+          review_id: review.review_id,
+          reply_text: text,
+        })),
+      )
+      setDispatched((prev) => {
+        const next = new Set(prev)
+        for (const { review } of items) next.add(reviewKey(review))
+        return next
+      })
+      toast.add({
+        title: `Sending ${items.length} repl${items.length === 1 ? "y" : "ies"}`,
+        description: "Publishing to the store (~1 minute).",
+      })
+    } catch (err) {
+      if (err instanceof AuthError) {
+        setTokenNotice("Access token was rejected — please enter a valid token to publish replies.")
+      } else {
+        toast.add({
+          title: "Send all failed",
+          description: err instanceof Error ? err.message : String(err),
+        })
+      }
+    } finally {
+      setSendingAll(false)
+    }
+  }
+
   if (!appCode) {
     return (
       <main className="mx-auto flex min-h-svh max-w-xl flex-col items-center justify-center gap-3 p-8 text-center">
@@ -233,6 +278,10 @@ export default function App() {
   }
 
   const reviews = payload?.reviews ?? []
+  const sendableCount = reviews.filter(
+    (review) =>
+      (drafts[reviewKey(review)] ?? "").trim().length > 0 && !dispatched.has(reviewKey(review)),
+  ).length
 
   return (
     <main className="min-h-svh bg-slate-50 antialiased">
@@ -269,12 +318,25 @@ export default function App() {
 
         {/* Reviews */}
         <section>
-          <div className="mb-4 flex items-center gap-2">
-            <h3 className="text-base font-semibold text-slate-900">New Reviews</h3>
-            {reviews.length > 0 && (
-              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white">
-                {reviews.length}
-              </span>
+          <div className="mb-4 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-semibold text-slate-900">New Reviews</h3>
+              {reviews.length > 0 && (
+                <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white">
+                  {reviews.length}
+                </span>
+              )}
+            </div>
+            {sendableCount > 0 && (
+              <Button
+                size="sm"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 transition-all"
+                onClick={() => void sendAll()}
+                disabled={sendingAll}
+              >
+                {sendingAll ? "Sending…" : `Send All (${sendableCount})`}
+                <Send className="size-3" />
+              </Button>
             )}
           </div>
 
