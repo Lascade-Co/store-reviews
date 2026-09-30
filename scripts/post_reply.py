@@ -64,8 +64,10 @@ def _send_one(states: dict, platform: str, review_id: str, reply_text: str, repl
 
     entry = states[platform].get("reviews", {}).get(review_id)
     if entry is None:
-        LOG.error("Review %s not active in %s state (pruned/expired?); skipping", review_id, platform)
-        return "failed"
+        # Benign: the review was already handled elsewhere and pruned, or expired.
+        # It's a no-op (nothing to send), not a failure — don't drag the exit code.
+        LOG.warning("Review %s not active in %s state (already handled/expired?); skipping", review_id, platform)
+        return "skipped"
 
     text_hash = reply_hash(reply_text)
     if entry.get("last_sent_reply_hash") == text_hash:
@@ -121,29 +123,40 @@ def main() -> int:
 
     states = {"appstore": load_state("appstore"), "playstore": load_state("playstore")}
     replier = _make_replier()
-    sent = skipped = failed = 0
+    sent = skipped = 0
+    failures: list[str] = []
     for item in items:
         if not isinstance(item, dict):
             LOG.error("Reply item is not an object: %r", item)
-            failed += 1
+            failures.append("?")
             continue
+        review_id = str(item.get("review_id") or "?")
         try:
             result = _send_one(
                 states,
                 item.get("platform", ""),
-                item.get("review_id", ""),
+                review_id,
                 item.get("reply_text", ""),
                 replier,
             )
         except Exception:
-            LOG.exception("Failed to send reply for review %r", item.get("review_id"))
-            failed += 1
+            LOG.exception("Failed to send reply for review %s", review_id)
+            failures.append(review_id)
             continue
-        sent += result == "sent"
-        skipped += result == "skipped"
-        failed += result == "failed"
+        if result == "sent":
+            sent += 1
+        elif result == "skipped":
+            skipped += 1
+        else:
+            failures.append(review_id)
 
+    failed = len(failures)
     LOG.info("Replies processed: %d sent, %d skipped, %d failed", sent, skipped, failed)
+    # Surface failures as run annotations so a partial batch failure is visible in
+    # the Actions UI even though the run stays green (green lets the commit step
+    # persist the replies that DID land).
+    for review_id in failures:
+        print(f"::error title=Reply failed::Could not send reply for review {review_id}")
 
     # Rebuild the pending-list ONCE so every replied review drops off the dashboard.
     app_details = {

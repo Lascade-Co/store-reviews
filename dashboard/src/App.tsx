@@ -147,18 +147,25 @@ export default function App() {
   // whether it's the first request or a rejected token.
   const [tokenNotice, setTokenNotice] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (reconcile = false) => {
     if (!appCode) {
       console.warn("[app] no ?app=<appcode> query param — showing the landing screen")
       return
     }
-    console.info(`[app] loading reviews for app "${appCode}"`)
+    console.info(`[app] loading reviews for app "${appCode}"${reconcile ? " (reconcile)" : ""}`)
     setLoading(true)
     setError(null)
     try {
       const data = await fetchReviews(appCode)
       console.info(`[app] render: ${data.reviews.length} pending review(s) for ${data.app_details?.appcode ?? appCode}`)
       setPayload(data)
+      if (reconcile) {
+        // The freshly-fetched list is the source of truth: any review still
+        // present was NOT actually replied (a queued/failed reply), so drop its
+        // optimistic "Replied" overlay and show the Reply button again.
+        const present = new Set(data.reviews.map(reviewKey))
+        setDispatched((prev) => new Set([...prev].filter((key) => !present.has(key))))
+      }
       setDrafts((prev) => {
         const next = { ...prev }
         for (const review of data.reviews) {
@@ -178,6 +185,14 @@ export default function App() {
 
   useEffect(() => {
     void load()
+  }, [load])
+
+  // After a reply/batch is dispatched, re-check the store's state once the
+  // workflow has had time to run (~90s). Replies that landed drop off the list;
+  // any that failed reappear (their optimistic "Replied" overlay is cleared) —
+  // so a partial or failed send self-corrects without a manual page refresh.
+  const scheduleReconcile = useCallback(() => {
+    window.setTimeout(() => void load(true), 90_000)
   }, [load])
 
   async function send(review: Review) {
@@ -206,6 +221,7 @@ export default function App() {
         title: "Reply sent",
         description: "Publishing to the store (~1 minute).",
       })
+      scheduleReconcile()
     } catch (err) {
       if (err instanceof AuthError) {
         setPendingKey(key)
@@ -251,6 +267,7 @@ export default function App() {
         title: `Sending ${items.length} repl${items.length === 1 ? "y" : "ies"}`,
         description: "Publishing to the store (~1 minute).",
       })
+      scheduleReconcile()
     } catch (err) {
       if (err instanceof AuthError) {
         setTokenNotice("Access token was rejected — please enter a valid token to publish replies.")

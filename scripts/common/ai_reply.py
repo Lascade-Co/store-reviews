@@ -26,22 +26,21 @@ MAX_SUGGESTED_REPLY_LENGTH = 340
 OUTPUT_FILENAME = "suggested_replies.json"
 CODEX_TIMEOUT_SECONDS = 600
 
-PROMPT_TEMPLATE = """You write the official public developer response to app store reviews.
+PROMPT_TEMPLATE = """You write official public developer replies to app store reviews.
 
-For EVERY review in the JSON array at the end of this message, write a reply that:
-- is written in the SAME language as the review's title and text — detect the
-  language from the text itself, never from the reviewer's name or country; if a
-  review is too short or ambiguous to tell, reply in English;
-- is warm, professional, and concise; thanks the reviewer and addresses their
-  specific points;
-- never promises refunds, compensation, or delivery timelines;
-- never requests or mentions personal data;
-- never uses placeholders such as [NAME] or [APP];
-- is at most {limit} characters.
+For EVERY review:
+- Reply in the SAME language as the review text; if unclear, use English.
+- Be warm, natural, professional, and concise.
+- Address the review's main point without simply repeating or summarizing it.
+- For detailed reviews, mention only 1–2 relevant points naturally; do not list every feature/detail.
+- For rating-only reviews, give a short thank-you and do not invent reasons for the rating.
+- Avoid AI-sounding, repetitive, overly enthusiastic, or promotional language.
+- Never invent facts, features, fixes, refunds, compensation, or delivery timelines.
+- Never request or mention personal data.
+- Never use placeholders such as [NAME] or [APP].
+- Keep the reply at most {limit} characters.
 
-Write ONLY a JSON object to a file named `{output}` in the current working
-directory, mapping each review's "id" to its reply string. Do not print the
-replies or any other commentary. Example: {{"abc123": "Thank you for ..."}}
+Write ONLY a JSON object to a file named `{output}` mapping each review's "id" to its reply string. Do not print replies or any other commentary.
 
 Reviews:
 {payload}

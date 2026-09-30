@@ -62,11 +62,13 @@ class SendOneTests(unittest.TestCase):
             result = post_reply._send_one(states, "playstore", "r1", "hello", boom)
         self.assertEqual(result, "skipped")
 
-    def test_failed_when_review_not_active(self):
+    def test_skipped_when_review_not_active(self):
+        # A review not in state (already handled elsewhere and pruned, or expired)
+        # is a benign no-op — skipped, not failed, so it doesn't sink a batch.
         states = {"appstore": {"reviews": {}}, "playstore": {"reviews": {}}}
         with patch("post_reply.save_state"):
             result = post_reply._send_one(states, "playstore", "missing", "hi", lambda *a: None)
-        self.assertEqual(result, "failed")
+        self.assertEqual(result, "skipped")
 
     def test_failed_on_unknown_platform(self):
         states = {"appstore": {"reviews": {}}, "playstore": {"reviews": {}}}

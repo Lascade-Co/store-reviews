@@ -28,9 +28,13 @@ on:
         required: false
         type: string
       platform:
-        description: "Single mode: store to reply on (appstore or playstore)"
+        # choice keeps dispatch-time validation for single/manual runs. In batch
+        # mode this is unused (the per-item platform lives in `replies`); GitHub
+        # defaults an omitted choice to the first option, which the batch path ignores.
+        description: "Single mode: store to reply on"
         required: false
-        type: string
+        type: choice
+        options: [appstore, playstore]
       review_id:
         description: "Single mode: store review id"
         required: false
@@ -46,6 +50,14 @@ on:
 # "all" group. State stays safe either way: the commit step reconciles
 # concurrent pushes via a JSON merge + retry, and post_reply.py guards each
 # reply by hash. review_id is empty in batch mode -> group ...-all.
+#
+# Known, benign race: a batch (group ...-all) and a single reply to the SAME
+# review (group ...-<id>) are in different groups, so they can run at once and
+# both send that review's reply. This is harmless — the store reply is
+# create-or-replace on both App Store and Google Play (idempotent; the store
+# ends with one reply), and merge_state reconciles the two commits. A shared
+# per-app group would prevent it but would re-introduce the far worse
+# cancel-drop of rapid single replies, so we accept the redundant call.
 concurrency:
   group: reply-${{ inputs.app_code }}-${{ inputs.review_id || 'all' }}
   cancel-in-progress: false
