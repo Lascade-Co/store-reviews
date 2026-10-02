@@ -7,13 +7,6 @@
         "bf7ce123-2b22-4fe1-a0ff-450e84af2360",
         "fdf4da99-e825-4bc9-b3d6-8522b7078246"
     ],
-    "reviews": {
-        "bf7ce123-2b22-4fe1-a0ff-450e84af2360": {
-            "posted_at": "2026-09-29T23:52:37.675338+00:00",
-            "google_reply_sent": true,
-            "last_sent_reply_hash": "4d3436fc174cab88870bad7ed76b203b82a94065fdf2563a25e52257d6302e58",
-            "replied_at": "2026-09-30T05:35:13.873889+00:00"
-        }
-    },
+    "reviews": {},
     "baselined": true
 }
