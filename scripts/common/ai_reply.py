@@ -93,6 +93,35 @@ def generate_suggested_replies(reviews: list[dict]) -> dict[str, str]:
             )
             with open(os.path.join(scratch, OUTPUT_FILENAME), encoding="utf-8") as handle:
                 data = json.load(handle)
+    except subprocess.CalledProcessError as exc:
+        # capture_output stores Codex's own output on the exception but never
+        # prints it; surface both streams so the real cause (auth, sandbox,
+        # usage limit, CLI change) is visible instead of just the exit code.
+        LOG.warning(
+            "Codex failed (exit %s); posting reviews without suggestions.\n"
+            "--- codex stderr ---\n%s\n--- codex stdout ---\n%s",
+            exc.returncode,
+            (exc.stderr or "").strip() or "(empty)",
+            (exc.stdout or "").strip() or "(empty)",
+        )
+        return {}
+    except subprocess.TimeoutExpired as exc:
+        LOG.warning(
+            "Codex timed out after %ss; posting reviews without suggestions.\n--- codex stderr ---\n%s",
+            CODEX_TIMEOUT_SECONDS,
+            (exc.stderr or "").strip() or "(empty)",
+        )
+        return {}
+    except FileNotFoundError:
+        LOG.warning(
+            "Codex ran but wrote no %s; posting reviews without suggestions", OUTPUT_FILENAME, exc_info=True
+        )
+        return {}
+    except json.JSONDecodeError as exc:
+        LOG.warning(
+            "Codex output was not valid JSON (%s); posting reviews without suggestions", exc, exc_info=True
+        )
+        return {}
     except Exception:
         LOG.warning("Codex suggested-reply generation failed; posting reviews without suggestions", exc_info=True)
         return {}

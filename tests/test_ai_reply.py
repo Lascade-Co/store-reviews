@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -50,6 +51,32 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
         with patch.object(ai_reply, "_codex_available", return_value=True), \
              patch("common.ai_reply.subprocess.run", side_effect=RuntimeError("codex died")):
             self.assertEqual(generate_suggested_replies(REVIEWS), {})
+
+    def test_codex_nonzero_exit_logs_captured_output(self):
+        error = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["codex", "exec"],
+            output="partial stdout",
+            stderr="stream error: usage limit reached",
+        )
+        with patch.object(ai_reply, "_codex_available", return_value=True), \
+             patch("common.ai_reply.subprocess.run", side_effect=error):
+            with self.assertLogs("common.ai_reply", level="WARNING") as logs:
+                self.assertEqual(generate_suggested_replies(REVIEWS), {})
+        logged = "\n".join(logs.output)
+        # The real cause (stderr) must be surfaced, not just the exit code.
+        self.assertIn("stream error: usage limit reached", logged)
+        self.assertIn("partial stdout", logged)
+
+    def test_codex_timeout_logs_captured_stderr(self):
+        timeout = subprocess.TimeoutExpired(
+            cmd=["codex", "exec"], timeout=600, output="", stderr="hung waiting on model"
+        )
+        with patch.object(ai_reply, "_codex_available", return_value=True), \
+             patch("common.ai_reply.subprocess.run", side_effect=timeout):
+            with self.assertLogs("common.ai_reply", level="WARNING") as logs:
+                self.assertEqual(generate_suggested_replies(REVIEWS), {})
+        self.assertIn("hung waiting on model", "\n".join(logs.output))
 
     def test_missing_output_file_returns_empty(self):
         with patch.object(ai_reply, "_codex_available", return_value=True), \
