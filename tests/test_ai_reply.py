@@ -52,21 +52,37 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
              patch("common.ai_reply.subprocess.run", side_effect=RuntimeError("codex died")):
             self.assertEqual(generate_suggested_replies(REVIEWS), {})
 
-    def test_codex_nonzero_exit_logs_captured_output(self):
+    def test_codex_nonzero_exit_logs_stderr_not_prompt(self):
         error = subprocess.CalledProcessError(
             returncode=1,
             cmd=["codex", "exec"],
-            output="partial stdout",
-            stderr="stream error: usage limit reached",
+            output="You write official public developer replies ...",  # prompt echo
+            stderr="ERROR codex_login::auth::manager: token_revoked",
         )
         with patch.object(ai_reply, "_codex_available", return_value=True), \
              patch("common.ai_reply.subprocess.run", side_effect=error):
             with self.assertLogs("common.ai_reply", level="WARNING") as logs:
                 self.assertEqual(generate_suggested_replies(REVIEWS), {})
         logged = "\n".join(logs.output)
-        # The real cause (stderr) must be surfaced, not just the exit code.
-        self.assertIn("stream error: usage limit reached", logged)
-        self.assertIn("partial stdout", logged)
+        # The real cause (stderr) is surfaced; the prompt echo on stdout is not.
+        self.assertIn("token_revoked", logged)
+        self.assertNotIn("official public developer replies", logged)
+
+    def test_codex_stderr_is_deduplicated(self):
+        # Same message repeated with different timestamps -> collapsed to one (xN).
+        stderr = "\n".join(
+            f"2026-10-06T23:57:3{i}.000000Z ERROR auth::manager: refresh token was revoked"
+            for i in range(5)
+        )
+        error = subprocess.CalledProcessError(returncode=1, cmd=["codex"], output="", stderr=stderr)
+        with patch.object(ai_reply, "_codex_available", return_value=True), \
+             patch("common.ai_reply.subprocess.run", side_effect=error):
+            with self.assertLogs("common.ai_reply", level="WARNING") as logs:
+                self.assertEqual(generate_suggested_replies(REVIEWS), {})
+        logged = "\n".join(logs.output)
+        self.assertIn("(x5) ERROR auth::manager: refresh token was revoked", logged)
+        # The message appears once (as the deduped line), not five times.
+        self.assertEqual(logged.count("refresh token was revoked"), 1)
 
     def test_codex_timeout_logs_captured_stderr(self):
         timeout = subprocess.TimeoutExpired(

@@ -14,11 +14,49 @@ object mapping each review id to its reply; the sync reads that file.
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 
 
 LOG = logging.getLogger(__name__)
+
+# Leading ISO-8601 timestamp Codex prefixes to each stderr line. Stripped before
+# deduping so the same message logged 300× (once per retry) collapses to one line.
+_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+")
+
+
+def _summarize_stream(text: object, max_lines: int = 25, max_chars: int = 4000) -> str:
+    """Collapse a noisy Codex stream into unique messages with repeat counts.
+
+    On an auth/transport failure Codex retries internally and prints the same
+    error hundreds of times, each with a fresh timestamp. Strip the timestamp,
+    keep each distinct message once in first-seen order with an ``(xN)`` count,
+    and cap the size so a retry storm becomes a few readable lines instead of a
+    thousand-line dump.
+    """
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    if not isinstance(text, str) or not text.strip():
+        return "(empty)"
+
+    counts: dict[str, int] = {}
+    order: list[str] = []
+    for raw in text.splitlines():
+        line = _TIMESTAMP_RE.sub("", raw.strip()).strip()
+        if not line:
+            continue
+        if line not in counts:
+            order.append(line)
+        counts[line] = counts.get(line, 0) + 1
+
+    rendered = [f"(x{counts[line]}) {line}" if counts[line] > 1 else line for line in order[:max_lines]]
+    if len(order) > max_lines:
+        rendered.append(f"... (+{len(order) - max_lines} more distinct line(s))")
+    summary = "\n".join(rendered)
+    if len(summary) > max_chars:
+        summary = summary[:max_chars] + "\n... (truncated)"
+    return summary
 
 # Google Play rejects replies over ~350 chars; keep a margin and use the same
 # budget for Apple so suggestions read consistently.
@@ -95,21 +133,21 @@ def generate_suggested_replies(reviews: list[dict]) -> dict[str, str]:
                 data = json.load(handle)
     except subprocess.CalledProcessError as exc:
         # capture_output stores Codex's own output on the exception but never
-        # prints it; surface both streams so the real cause (auth, sandbox,
-        # usage limit, CLI change) is visible instead of just the exit code.
+        # prints it. Surface the real cause (auth, sandbox, usage limit) from
+        # stderr, deduplicated — Codex echoes the whole prompt to stdout and
+        # repeats each error per retry, so we log neither raw.
+        detail = exc.stderr if (exc.stderr and str(exc.stderr).strip()) else exc.stdout
         LOG.warning(
-            "Codex failed (exit %s); posting reviews without suggestions.\n"
-            "--- codex stderr ---\n%s\n--- codex stdout ---\n%s",
+            "Codex failed (exit %s); posting reviews without suggestions.\n--- codex error ---\n%s",
             exc.returncode,
-            (exc.stderr or "").strip() or "(empty)",
-            (exc.stdout or "").strip() or "(empty)",
+            _summarize_stream(detail),
         )
         return {}
     except subprocess.TimeoutExpired as exc:
         LOG.warning(
-            "Codex timed out after %ss; posting reviews without suggestions.\n--- codex stderr ---\n%s",
+            "Codex timed out after %ss; posting reviews without suggestions.\n--- codex error ---\n%s",
             CODEX_TIMEOUT_SECONDS,
-            (exc.stderr or "").strip() or "(empty)",
+            _summarize_stream(exc.stderr),
         )
         return {}
     except FileNotFoundError:
