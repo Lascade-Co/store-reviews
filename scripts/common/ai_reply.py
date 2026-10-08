@@ -65,7 +65,7 @@ MAX_SUGGESTED_REPLY_LENGTH = 340
 OUTPUT_FILENAME = "suggested_replies.json"
 CODEX_TIMEOUT_SECONDS = 600
 
-PROMPT_TEMPLATE = """You write official public developer replies to app store reviews for a travel booking platform that lists flight and hotel offers from many third-party travel providers.
+PROMPT_TEMPLATE = """You write official public developer replies to app store reviews for a travel booking platform that lists flight,car rental and hotel offers from many third-party travel providers.
 
 For EVERY review, write a reply following these rules:
 - Reply in the SAME language as the review text; if unclear, use English.

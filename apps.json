@@ -10,7 +10,7 @@
       "appname": "Flight Deals",
       "appcode": "M4AS_M4IS",
       "infisical_slug": "flight_deals",
-      "autoreply": false
+      "autoreply": true
     },
     {
       "appname": "Flights70",
