@@ -89,13 +89,15 @@ def collect_new_reviews(
     returns ``{review_id: {"reply", "auto_reply", "ping"}}``; it must never raise
     (AI is optional).
 
-    Auto-reply: when ``auto_reply_enabled`` (the app opted in), Codex flagged
-    ``auto_reply`` for a review, the rating is >= ``AUTO_REPLY_MIN_RATING``, and a
+    Auto-reply: when ``auto_reply_enabled`` (the app opted in) and a
     ``reply_sender(review_id, text)`` callable is supplied, the reply is sent now
     and recorded like a manual reply (``last_sent_reply_hash`` + ``replied_at`` +
-    the reply flag) plus ``auto_replied=True``. A send failure is logged and the
-    review stays pending for a manual reply. Reviews Codex flagged ``ping`` are
-    appended to ``ping_sink`` (when provided) for the developer Slack notice.
+    the reply flag) plus ``auto_replied=True`` — for either a Codex ``auto_reply``
+    (simple positive) whose rating is >= ``AUTO_REPLY_MIN_RATING``, or a Codex
+    ``support_redirect`` (booking/payment issue whose reply just points to the
+    provider) at any rating. A send failure is logged and the review stays pending
+    for a manual reply. Reviews Codex flagged ``ping`` are appended to
+    ``ping_sink`` (when provided) for the developer Slack notice.
     """
     if initial_sync:
         # Baseline only: mark every existing review as seen (posted_ids), record
@@ -126,16 +128,22 @@ def collect_new_reviews(
             suggested_reply = suggestion.get("reply")
             entry = normalizer(review, suggested_reply)
 
-            # Auto-reply a simple positive review when the app opted in and the
-            # rating clears the floor. A send failure leaves it pending so the
-            # operator can still reply by hand.
+            # Auto-reply when the app opted in and either: a simple positive
+            # review clears the rating floor, or it's a booking/payment/support
+            # review whose reply just redirects to the provider (safe generic
+            # content, so no rating floor). A send failure leaves it pending so
+            # the operator can still reply by hand.
+            positive_auto = (
+                suggestion.get("auto_reply")
+                and int(entry.get("rating") or 0) >= AUTO_REPLY_MIN_RATING
+            )
+            support_auto = bool(suggestion.get("support_redirect"))
             auto_sent = False
             if (
                 auto_reply_enabled
-                and suggestion.get("auto_reply")
                 and suggested_reply
                 and reply_sender is not None
-                and int(entry.get("rating") or 0) >= AUTO_REPLY_MIN_RATING
+                and (positive_auto or support_auto)
             ):
                 try:
                     reply_sender(review_id, suggested_reply)

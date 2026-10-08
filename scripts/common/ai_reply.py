@@ -82,9 +82,10 @@ For EVERY review, write a reply following these rules:
 
 For EACH review also classify:
 - "auto_reply": set true ONLY after carefully analysing the review and concluding it is a SIMPLE, clearly POSITIVE review that needs only a GENERIC thank-you reply — i.e. unambiguous praise or rating-only positivity, with NO complaint, bug report, question, feature request, mixed sentiment, or anything needing a specific or factual answer. If the review needs any tailored or factual response, set false. When in doubt, set false.
+- "support_redirect": set true if the review is about a booking, payment, refund, cancellation, or a specific order/trip problem — i.e. the one your reply hands off to the travel provider's support (per the booking-issue rule above). Otherwise false.
 - "ping": set true if the review reports an app problem/bug or makes a feature suggestion the developer should see; otherwise false.
 
-Write ONLY a JSON object to a file named `{output}` mapping each review's "id" to an object of the form {{"reply": "<reply string>", "auto_reply": <true|false>, "ping": <true|false>}}. Do not print the JSON or any other commentary.
+Write ONLY a JSON object to a file named `{output}` mapping each review's "id" to an object of the form {{"reply": "<reply string>", "auto_reply": <true|false>, "support_redirect": <true|false>, "ping": <true|false>}}. Do not print the JSON or any other commentary.
 
 Reviews:
 {payload}
@@ -98,13 +99,13 @@ def _codex_available() -> bool:
 
 
 def generate_suggested_replies(reviews: list[dict]) -> dict[str, dict]:
-    """Return {review_id: {"reply", "auto_reply", "ping"}} (empty on any failure).
+    """Return {review_id: {reply, auto_reply, support_redirect, ping}} (empty on failure).
 
-    ``reviews`` items are ``{"id", "platform", "rating", "title", "body"}``.
-    Each returned value is ``{"reply": str, "auto_reply": bool, "ping": bool}``.
-    A review Codex produced no usable reply for is omitted. A degenerate output
-    whose value is a bare reply string (older shape / model slip) is tolerated as
-    a reply with both flags false.
+    ``reviews`` items are ``{"id", "platform", "rating", "title", "body"}``. Each
+    returned value is ``{"reply": str, "auto_reply": bool, "support_redirect":
+    bool, "ping": bool}``. A review Codex produced no usable reply for is omitted.
+    A degenerate output whose value is a bare reply string (older shape / model
+    slip) is tolerated as a reply with all flags false.
     """
     if not reviews:
         return {}
@@ -190,6 +191,7 @@ def generate_suggested_replies(reviews: list[dict]) -> dict[str, dict]:
         suggestions[str(review_id)] = {
             "reply": reply.strip()[:MAX_SUGGESTED_REPLY_LENGTH].rstrip(),
             "auto_reply": bool(value.get("auto_reply")),
+            "support_redirect": bool(value.get("support_redirect")),
             "ping": bool(value.get("ping")),
         }
     LOG.info("Codex generated %d suggested repl(ies)", len(suggestions))

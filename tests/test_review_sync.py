@@ -69,6 +69,28 @@ class AutoReplyAndPingTests(unittest.TestCase):
         self.assertFalse(entries[0]["auto_replied"])
         self.assertFalse(state["reviews"]["r1"].get("auto_replied"))
 
+    def test_support_redirect_auto_sends_regardless_of_rating(self):
+        # A booking/payment complaint is low-rated but its redirect reply is safe
+        # generic content, so it auto-sends even below the positive rating floor.
+        sender = Mock()
+        entries, state = self._collect(
+            suggestion={"reply": "Please contact the provider's support.",
+                        "auto_reply": False, "support_redirect": True, "ping": False},
+            rating=1, auto_enabled=True, reply_sender=sender,
+        )
+        sender.assert_called_once_with("r1", "Please contact the provider's support.")
+        self.assertTrue(entries[0]["auto_replied"])
+        self.assertTrue(state["reviews"]["r1"]["auto_replied"])
+
+    def test_support_redirect_still_respects_opt_in(self):
+        sender = Mock()
+        self._collect(
+            suggestion={"reply": "Please contact the provider's support.",
+                        "auto_reply": False, "support_redirect": True, "ping": False},
+            rating=1, auto_enabled=False, reply_sender=sender,
+        )
+        sender.assert_not_called()
+
     def test_not_sent_when_app_not_opted_in(self):
         sender = Mock()
         self._collect(

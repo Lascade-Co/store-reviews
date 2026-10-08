@@ -32,8 +32,8 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
             with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
                 json.dump(
                     {
-                        "r1": {"reply": "¡Gracias!", "auto_reply": True, "ping": False},
-                        "r2": {"reply": "Sorry to hear that.", "auto_reply": False, "ping": True},
+                        "r1": {"reply": "¡Gracias!", "auto_reply": True, "support_redirect": False, "ping": False},
+                        "r2": {"reply": "Contact the provider.", "auto_reply": False, "support_redirect": True, "ping": False},
                     },
                     fh,
                 )
@@ -50,8 +50,8 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                "r1": {"reply": "¡Gracias!", "auto_reply": True, "ping": False},
-                "r2": {"reply": "Sorry to hear that.", "auto_reply": False, "ping": True},
+                "r1": {"reply": "¡Gracias!", "auto_reply": True, "support_redirect": False, "ping": False},
+                "r2": {"reply": "Contact the provider.", "auto_reply": False, "support_redirect": True, "ping": False},
             },
         )
         # Correct codex invocation.
@@ -69,7 +69,10 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
              patch("common.ai_reply.subprocess.run", side_effect=fake_run):
             result = generate_suggested_replies(REVIEWS)
 
-        self.assertEqual(result["r1"], {"reply": "Thanks!", "auto_reply": False, "ping": False})
+        self.assertEqual(
+            result["r1"],
+            {"reply": "Thanks!", "auto_reply": False, "support_redirect": False, "ping": False},
+        )
 
     def test_non_bool_flags_are_coerced(self):
         def fake_run(cmd, **kwargs):
