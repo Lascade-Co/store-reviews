@@ -13,6 +13,9 @@ export interface Review {
   suggested_reply: string | null
   replied: boolean
   reply_text: string | null
+  // True when the sync auto-sent the reply (simple positive review). Optional:
+  // entries written before this feature won't carry it.
+  auto_replied?: boolean
 }
 
 export interface AppDetails {

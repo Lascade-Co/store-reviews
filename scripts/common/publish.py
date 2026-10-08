@@ -100,6 +100,8 @@ def _entry_is_pending(entry: dict, states: dict) -> bool:
     review = state.get("reviews", {}).get(entry.get("review_id"))
     if not isinstance(review, dict):
         return False  # pruned/expired
+    if review.get("auto_replied"):
+        return True  # keep showing with the "Auto replied" badge until pruned (~2 days)
     if review.get("last_sent_reply_hash"):
         return False  # replied via the dashboard — never shown again
     if any(key.endswith("_reply_sent") and value for key, value in review.items()):
@@ -145,7 +147,7 @@ def build_list(
     }
 
 
-def notify_slack(new_count: int, app_details: dict) -> None:
+def notify_slack(new_count: int, app_details: dict, auto_count: int = 0) -> None:
     """One message per run, only when new reviews arrived."""
     if new_count <= 0:
         return
@@ -155,6 +157,8 @@ def notify_slack(new_count: int, app_details: dict) -> None:
         return
     app_name = app_details.get("appname") or app_details.get("appcode", "")
     app_code = app_details.get("appcode", "")
+    # Only shown when the run auto-replied to some of the new reviews.
+    auto_line = f"*Auto-replied:* {auto_count}\n" if auto_count > 0 else ""
     try:
         slack = SlackClient()
         # Labelled fields (bold labels via *…*). Slack trims real leading/trailing
@@ -164,6 +168,7 @@ def notify_slack(new_count: int, app_details: dict) -> None:
             f"*App Code:* {app_code}\n"
             f"*App Name:* {app_name}\n"
             f"*New Reviews:* {new_count}\n"
+            f"{auto_line}"
             f"*Review URL:* {site}/?app={app_code}\n"
             f"⠀\n"
 
@@ -171,6 +176,45 @@ def notify_slack(new_count: int, app_details: dict) -> None:
     except Exception:
         # Notification is best-effort: the data file is already uploaded.
         LOG.warning("Slack notification failed; dashboard data was published anyway", exc_info=True)
+
+
+def notify_developer(app_details: dict, pings: list[dict]) -> None:
+    """Ping the app's developer in Slack about issue/suggestion reviews.
+
+    Best-effort and opt-in: does nothing unless SLACK_DEV_ID is set (injected per
+    app from Infisical). The mentioned developer is only notified if they are a
+    member of the app's Slack channel. Never raises.
+    """
+    if not pings:
+        return
+    dev_id = os.environ.get("SLACK_DEV_ID", "").strip()
+    if not dev_id:
+        LOG.info("SLACK_DEV_ID not set; skipping developer ping")
+        return
+    app_name = app_details.get("appname") or app_details.get("appcode", "")
+    app_code = app_details.get("appcode", "")
+    site = os.environ.get("SITE_BASE_URL", "").strip().rstrip("/")
+
+    lines = [f"<@{dev_id}> *{len(pings)} review(s) need a look — {app_name}*"]
+    for item in pings[:10]:
+        rating = item.get("rating")
+        stars = f"{rating}★ " if rating else ""
+        platform = item.get("platform", "")
+        body = (item.get("body") or "").strip().replace("\n", " ")
+        if len(body) > 160:
+            body = body[:160].rstrip() + "…"
+        lines.append(f"• {stars}[{platform}] {body}")
+    if len(pings) > 10:
+        lines.append(f"…and {len(pings) - 10} more.")
+    if site and app_code:
+        lines.append(f"{site}/?app={app_code}")
+    lines.append("⠀")
+
+    try:
+        SlackClient().post_review("\n".join(lines))
+    except Exception:
+        # Best-effort: the dashboard data is already published.
+        LOG.warning("Developer Slack ping failed; continuing", exc_info=True)
 
 
 def publish(app_details: dict, states: dict, new_entries: list[dict]) -> None:
@@ -188,4 +232,5 @@ def publish(app_details: dict, states: dict, new_entries: list[dict]) -> None:
     # recorded but filtered out of the dashboard; it must not inflate the
     # "new reviews received" number so Slack matches what the dashboard shows.
     new_pending = sum(1 for entry in new_entries if _entry_is_pending(entry, states))
-    notify_slack(new_pending, app_details)
+    auto_count = sum(1 for entry in new_entries if entry.get("auto_replied"))
+    notify_slack(new_pending, app_details, auto_count)

@@ -1,7 +1,14 @@
+import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from common.publish import build_list, decode_payload, encode_payload, publish
+from common.publish import (
+    build_list,
+    decode_payload,
+    encode_payload,
+    notify_developer,
+    publish,
+)
 from common.review_sync import collect_new_reviews
 
 
@@ -114,7 +121,7 @@ class PublishNotifyTests(unittest.TestCase):
 
         notify = self._publish(new_entries, states)
 
-        notify.assert_called_once_with(1, APP)  # not 2 — the replied one is excluded
+        notify.assert_called_once_with(1, APP, 0)  # not 2 — the replied one is excluded
 
     def test_notify_counts_all_when_every_new_review_is_pending(self):
         new_entries = [entry("appstore", "n1"), entry("playstore", "n2")]
@@ -125,7 +132,30 @@ class PublishNotifyTests(unittest.TestCase):
 
         notify = self._publish(new_entries, states)
 
-        notify.assert_called_once_with(2, APP)
+        notify.assert_called_once_with(2, APP, 0)
+
+    def test_auto_replied_entry_stays_pending_and_is_counted(self):
+        # An auto-replied review: its state carries auto_replied + a reply hash,
+        # yet it must remain on the dashboard (badge) and be counted as auto.
+        new_entries = [
+            entry("playstore", "auto1", auto_replied=True, replied=True, reply_text="Thanks!"),
+        ]
+        states = {
+            "appstore": {"reviews": {}},
+            "playstore": {
+                "reviews": {
+                    "auto1": {
+                        "auto_replied": True,
+                        "google_reply_sent": True,
+                        "last_sent_reply_hash": "abc",
+                    }
+                }
+            },
+        }
+
+        notify = self._publish(new_entries, states)
+
+        notify.assert_called_once_with(1, APP, 1)  # pending=1, auto=1
 
 
 class CollectNewReviewsTests(unittest.TestCase):
@@ -169,6 +199,42 @@ class CollectNewReviewsTests(unittest.TestCase):
 
         self.assertEqual([e["review_id"] for e in entries], ["r6", "r7"])  # oldest-first
         self.assertEqual(state["last_review_id"], "r7")
+
+
+class DevPingTests(unittest.TestCase):
+    PINGS = [
+        {"review_id": "r1", "platform": "playstore", "rating": 2, "title": None, "body": "crashes on launch"},
+    ]
+
+    def test_skips_when_no_dev_id(self):
+        with patch.dict(os.environ, {}, clear=False), patch("common.publish.SlackClient") as slack:
+            os.environ.pop("SLACK_DEV_ID", None)
+            notify_developer(APP, self.PINGS)
+        slack.assert_not_called()
+
+    def test_skips_when_no_pings(self):
+        with patch.dict(os.environ, {"SLACK_DEV_ID": "U123"}), patch("common.publish.SlackClient") as slack:
+            notify_developer(APP, [])
+        slack.assert_not_called()
+
+    def test_posts_mention_and_body_when_dev_id_present(self):
+        inst = Mock()
+        with patch.dict(os.environ, {"SLACK_DEV_ID": "U123"}), patch(
+            "common.publish.SlackClient", return_value=inst
+        ) as slack:
+            notify_developer(APP, self.PINGS)
+        slack.assert_called_once()
+        text = inst.post_review.call_args.args[0]
+        self.assertIn("<@U123>", text)
+        self.assertIn("crashes on launch", text)
+
+    def test_slack_failure_is_swallowed(self):
+        inst = Mock()
+        inst.post_review.side_effect = RuntimeError("boom")
+        with patch.dict(os.environ, {"SLACK_DEV_ID": "U123"}), patch(
+            "common.publish.SlackClient", return_value=inst
+        ):
+            notify_developer(APP, self.PINGS)  # must not raise
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ from google.oauth2 import service_account
 from common.ai_reply import generate_suggested_replies
 from common.review_sync import collect_new_reviews
 from common.state_manager import load_state, now_iso, save_state
-from common.utils import request_with_retries
+from common.utils import env_flag, request_with_retries
 
 
 LOG = logging.getLogger(__name__)
@@ -305,8 +305,8 @@ def _review_id(review: dict) -> str:
     return review["reviewId"]
 
 
-def _suggest_batch(new_reviews: list[dict]) -> dict[str, str]:
-    """One Codex call for all new Google Play reviews → {review_id: reply}."""
+def _suggest_batch(new_reviews: list[dict]) -> dict[str, dict]:
+    """One Codex call for all new Google Play reviews → {review_id: {reply, auto_reply, ping}}."""
     items = []
     for review in new_reviews:
         comment = _user_comment(review)
@@ -343,6 +343,7 @@ def normalize_entry(review: dict, suggested_reply: str | None) -> dict:
         "suggested_reply": suggested_reply,
         "replied": False,
         "reply_text": None,
+        "auto_replied": False,
     }
 
 
@@ -352,11 +353,11 @@ REQUIRED_PLAYSTORE_ENV = (
 )
 
 
-def run_playstore_collect() -> tuple[list[dict], dict]:
-    """Fetch + record new reviews in state, return dashboard entries + state."""
+def run_playstore_collect() -> tuple[list[dict], dict, list[dict]]:
+    """Fetch + record new reviews in state, return (entries, state, ping items)."""
     if not all(os.environ.get(name) for name in REQUIRED_PLAYSTORE_ENV):
         LOG.info("Google Play not configured for this app; skipping")
-        return [], load_state("playstore")
+        return [], load_state("playstore"), []
 
     LOG.info("Generating Google Play OAuth access token")
     credentials = _credentials()
@@ -381,6 +382,7 @@ def run_playstore_collect() -> tuple[list[dict], dict]:
     if flags_changed:
         save_state("playstore", state)
 
+    pings: list[dict] = []
     entries = collect_new_reviews(
         "playstore",
         reviews,
@@ -393,5 +395,8 @@ def run_playstore_collect() -> tuple[list[dict], dict]:
         # lastModified order is mutable; never stop at the boundary (see fetch_reviews).
         stop_at_boundary=False,
         suggestion_generator=_suggest_batch,
+        reply_sender=lambda review_id, text: reply_to_review(credentials, review_id, text),
+        auto_reply_enabled=env_flag("APP_AUTO_REPLY"),
+        ping_sink=pings,
     )
-    return entries, state
+    return entries, state, pings

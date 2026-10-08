@@ -136,6 +136,11 @@ jobs:
           APP_CODE: ${{ matrix.app.appcode }}
           APP_NAME: ${{ matrix.app.appname }}
           APP_INFISICAL_SLUG: ${{ matrix.app.infisical_slug }}
+          # Per-app opt-in (apps.json "autoreply"). When true, the sync auto-sends
+          # replies Codex flagged as simple positives (rating >= 3). Empty/false =
+          # suggest-only. SLACK_DEV_ID (developer ping target) needs no entry here:
+          # the Infisical step already exports every /reviews key as env.
+          APP_AUTO_REPLY: ${{ matrix.app.autoreply }}
           # One internal bot serves every app by default, so its token lives
           # once on this repo. An app can still override it by putting its own
           # SLACK_BOT_TOKEN in its Infisical /reviews folder: the code prefers

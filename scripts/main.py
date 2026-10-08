@@ -8,7 +8,7 @@ for the whole run.
 import logging
 import os
 
-from common.publish import publish
+from common.publish import notify_developer, publish
 from providers.appstore import run_appstore_collect
 from providers.playstore import run_playstore_collect
 
@@ -31,13 +31,14 @@ def main():
         app_details["appname"],
     )
 
-    appstore_entries, appstore_state = run_appstore_collect()
-    playstore_entries, playstore_state = run_playstore_collect()
+    appstore_entries, appstore_state, appstore_pings = run_appstore_collect()
+    playstore_entries, playstore_state, playstore_pings = run_playstore_collect()
     publish(
         app_details,
         {"appstore": appstore_state, "playstore": playstore_state},
         appstore_entries + playstore_entries,
     )
+    notify_developer(app_details, appstore_pings + playstore_pings)
 
 
 if __name__ == "__main__":

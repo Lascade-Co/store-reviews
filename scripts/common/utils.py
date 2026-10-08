@@ -1,10 +1,16 @@
 import logging
+import os
 import time
 
 import requests
 
 
 LOG = logging.getLogger(__name__)
+
+
+def env_flag(name: str) -> bool:
+    """True when env var ``name`` is set to a truthy string (true/1/yes/on)."""
+    return os.environ.get(name, "").strip().lower() in {"true", "1", "yes", "on"}
 
 
 def request_with_retries(method: str, url: str, **kwargs) -> requests.Response:

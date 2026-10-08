@@ -12,7 +12,7 @@ from common.ai_reply import generate_suggested_replies
 from common.jwt_generator import generate_token
 from common.review_sync import collect_new_reviews
 from common.state_manager import load_state, now_iso
-from common.utils import request_with_retries
+from common.utils import env_flag, request_with_retries
 
 
 LOG = logging.getLogger(__name__)
@@ -127,8 +127,8 @@ def _review_id(review: dict) -> str:
     return review["id"]
 
 
-def _suggest_batch(new_reviews: list[dict]) -> dict[str, str]:
-    """One Codex call for all new App Store reviews → {review_id: reply}."""
+def _suggest_batch(new_reviews: list[dict]) -> dict[str, dict]:
+    """One Codex call for all new App Store reviews → {review_id: {reply, auto_reply, ping}}."""
     items = [
         {
             "id": review["id"],
@@ -158,6 +158,7 @@ def normalize_entry(review: dict, suggested_reply: str | None) -> dict:
         "suggested_reply": suggested_reply,
         "replied": False,
         "reply_text": None,
+        "auto_replied": False,
     }
 
 
@@ -169,11 +170,11 @@ REQUIRED_APPSTORE_ENV = (
 )
 
 
-def run_appstore_collect() -> tuple[list[dict], dict]:
-    """Fetch + record new reviews in state, return dashboard entries + state."""
+def run_appstore_collect() -> tuple[list[dict], dict, list[dict]]:
+    """Fetch + record new reviews in state, return (entries, state, ping items)."""
     if not all(os.environ.get(name) for name in REQUIRED_APPSTORE_ENV):
         LOG.info("App Store not configured for this app; skipping")
-        return [], load_state("appstore")
+        return [], load_state("appstore"), []
 
     LOG.info("Generating App Store Connect JWT")
     token = generate_token()
@@ -190,6 +191,7 @@ def run_appstore_collect() -> tuple[list[dict], dict]:
         reviews = fetch_reviews(token, stop_at_id=state.get("last_review_id"))
     LOG.info("Fetched %d review(s)", len(reviews))
 
+    pings: list[dict] = []
     entries = collect_new_reviews(
         "appstore",
         reviews,
@@ -202,5 +204,8 @@ def run_appstore_collect() -> tuple[list[dict], dict]:
         # last_review_id boundary is safe for Apple (unlike Google).
         stop_at_boundary=True,
         suggestion_generator=_suggest_batch,
+        reply_sender=lambda review_id, text: reply_to_review(token, review_id, text),
+        auto_reply_enabled=env_flag("APP_AUTO_REPLY"),
+        ping_sink=pings,
     )
-    return entries, state
+    return entries, state, pings

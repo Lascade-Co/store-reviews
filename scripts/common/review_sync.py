@@ -8,6 +8,10 @@ from common.state_manager import mark_posted, now_iso, save_state, upsert_review
 
 LOG = logging.getLogger(__name__)
 
+# A review must be at least this many stars to be eligible for auto-reply, on top
+# of Codex's auto_reply flag and the per-app opt-in (see collect_new_reviews).
+AUTO_REPLY_MIN_RATING = 3
+
 
 def reply_hash(text: str) -> str:
     """Return a stable hash for the normalized response text."""
@@ -67,6 +71,9 @@ def collect_new_reviews(
     reply_sent_getter=None,
     stop_at_boundary: bool = True,
     suggestion_generator=None,
+    reply_sender=None,
+    auto_reply_enabled: bool = False,
+    ping_sink=None,
 ) -> list[dict]:
     """Select new reviews, record them in state, return dashboard entries.
 
@@ -79,7 +86,16 @@ def collect_new_reviews(
     posted_ids), last_review_id advances, and ``normalizer(review,
     suggested_reply)`` dicts are returned for the app's pending-list data file.
     ``suggestion_generator`` is called ONCE with the list of new reviews and
-    returns ``{review_id: reply}``; it must never raise (AI is optional).
+    returns ``{review_id: {"reply", "auto_reply", "ping"}}``; it must never raise
+    (AI is optional).
+
+    Auto-reply: when ``auto_reply_enabled`` (the app opted in), Codex flagged
+    ``auto_reply`` for a review, the rating is >= ``AUTO_REPLY_MIN_RATING``, and a
+    ``reply_sender(review_id, text)`` callable is supplied, the reply is sent now
+    and recorded like a manual reply (``last_sent_reply_hash`` + ``replied_at`` +
+    the reply flag) plus ``auto_replied=True``. A send failure is logged and the
+    review stays pending for a manual reply. Reviews Codex flagged ``ping`` are
+    appended to ``ping_sink`` (when provided) for the developer Slack notice.
     """
     if initial_sync:
         # Baseline only: mark every existing review as seen (posted_ids), record
@@ -104,20 +120,63 @@ def collect_new_reviews(
         LOG.info("Collected %d new %s review(s) for the dashboard", len(new_reviews), provider)
         for review in reversed(new_reviews):
             review_id = review_id_getter(review)
-            suggested_reply = suggestions.get(review_id)
-            upsert_review(
-                state,
-                review_id,
-                posted_at=now_iso(),
-                **{
-                    reply_sent_key: (
-                        bool(reply_sent_getter(review)) if reply_sent_getter else False
+            suggestion = suggestions.get(review_id)
+            if not isinstance(suggestion, dict):
+                suggestion = {}
+            suggested_reply = suggestion.get("reply")
+            entry = normalizer(review, suggested_reply)
+
+            # Auto-reply a simple positive review when the app opted in and the
+            # rating clears the floor. A send failure leaves it pending so the
+            # operator can still reply by hand.
+            auto_sent = False
+            if (
+                auto_reply_enabled
+                and suggestion.get("auto_reply")
+                and suggested_reply
+                and reply_sender is not None
+                and int(entry.get("rating") or 0) >= AUTO_REPLY_MIN_RATING
+            ):
+                try:
+                    reply_sender(review_id, suggested_reply)
+                    auto_sent = True
+                    LOG.info("Auto-replied to %s review %s", provider, review_id)
+                except Exception:
+                    LOG.warning(
+                        "Auto-reply failed for %s review %s; leaving it pending for manual reply",
+                        provider,
+                        review_id,
+                        exc_info=True,
                     )
-                },
-            )
+
+            values = {
+                "posted_at": now_iso(),
+                reply_sent_key: bool(reply_sent_getter(review)) if reply_sent_getter else False,
+            }
+            if auto_sent:
+                values[reply_sent_key] = True
+                values["auto_replied"] = True
+                values["replied_at"] = now_iso()
+                values["last_sent_reply_hash"] = reply_hash(suggested_reply)
+            upsert_review(state, review_id, **values)
             mark_posted(state, review_id)
             save_state(provider, state)
-            entries.append(normalizer(review, suggested_reply))
+
+            if auto_sent:
+                entry["auto_replied"] = True
+                entry["replied"] = True
+                entry["reply_text"] = suggested_reply
+            if suggestion.get("ping") and ping_sink is not None:
+                ping_sink.append(
+                    {
+                        "review_id": review_id,
+                        "platform": entry.get("platform"),
+                        "rating": entry.get("rating"),
+                        "title": entry.get("title"),
+                        "body": entry.get("body"),
+                    }
+                )
+            entries.append(entry)
         state["last_review_id"] = review_id_getter(reviews[0])
         save_state(provider, state)
     else:

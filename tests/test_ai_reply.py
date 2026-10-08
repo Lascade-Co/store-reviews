@@ -30,7 +30,13 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
         def fake_run(cmd, **kwargs):
             # Codex writes the output file into its cwd (the scratch dir).
             with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
-                json.dump({"r1": "¡Gracias!", "r2": "Sorry to hear that."}, fh)
+                json.dump(
+                    {
+                        "r1": {"reply": "¡Gracias!", "auto_reply": True, "ping": False},
+                        "r2": {"reply": "Sorry to hear that.", "auto_reply": False, "ping": True},
+                    },
+                    fh,
+                )
 
             class R:  # minimal CompletedProcess stand-in
                 pass
@@ -41,11 +47,42 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
              patch("common.ai_reply.subprocess.run", side_effect=fake_run) as run:
             result = generate_suggested_replies(REVIEWS)
 
-        self.assertEqual(result, {"r1": "¡Gracias!", "r2": "Sorry to hear that."})
+        self.assertEqual(
+            result,
+            {
+                "r1": {"reply": "¡Gracias!", "auto_reply": True, "ping": False},
+                "r2": {"reply": "Sorry to hear that.", "auto_reply": False, "ping": True},
+            },
+        )
         # Correct codex invocation.
         cmd = run.call_args.args[0]
         self.assertEqual(cmd[:2], ["codex", "exec"])
         self.assertIn("--sandbox", cmd)
+
+    def test_bare_string_output_is_tolerated_as_reply_with_flags_false(self):
+        def fake_run(cmd, **kwargs):
+            with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
+                json.dump({"r1": "Thanks!"}, fh)  # old id->string shape
+            return None
+
+        with patch.object(ai_reply, "_codex_available", return_value=True), \
+             patch("common.ai_reply.subprocess.run", side_effect=fake_run):
+            result = generate_suggested_replies(REVIEWS)
+
+        self.assertEqual(result["r1"], {"reply": "Thanks!", "auto_reply": False, "ping": False})
+
+    def test_non_bool_flags_are_coerced(self):
+        def fake_run(cmd, **kwargs):
+            with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
+                json.dump({"r1": {"reply": "Hi", "auto_reply": 1, "ping": "yes"}}, fh)
+            return None
+
+        with patch.object(ai_reply, "_codex_available", return_value=True), \
+             patch("common.ai_reply.subprocess.run", side_effect=fake_run):
+            result = generate_suggested_replies(REVIEWS)
+
+        self.assertIs(result["r1"]["auto_reply"], True)
+        self.assertIs(result["r1"]["ping"], True)
 
     def test_codex_failure_returns_empty(self):
         with patch.object(ai_reply, "_codex_available", return_value=True), \
@@ -103,16 +140,25 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
     def test_overlong_and_blank_replies_are_clamped_and_dropped(self):
         def fake_run(cmd, **kwargs):
             with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
-                json.dump({"r1": "x" * 600, "r2": "   ", "r3": 5}, fh)
+                json.dump(
+                    {
+                        "r1": {"reply": "x" * 600, "auto_reply": False, "ping": False},
+                        "r2": {"reply": "   "},  # blank reply
+                        "r3": 5,  # non-dict, non-string
+                        "r4": {"auto_reply": True},  # missing reply
+                    },
+                    fh,
+                )
             return None
 
         with patch.object(ai_reply, "_codex_available", return_value=True), \
              patch("common.ai_reply.subprocess.run", side_effect=fake_run):
             result = generate_suggested_replies(REVIEWS)
 
-        self.assertEqual(len(result["r1"]), MAX_SUGGESTED_REPLY_LENGTH)
-        self.assertNotIn("r2", result)  # blank dropped
-        self.assertNotIn("r3", result)  # non-string dropped
+        self.assertEqual(len(result["r1"]["reply"]), MAX_SUGGESTED_REPLY_LENGTH)
+        self.assertNotIn("r2", result)  # blank reply dropped
+        self.assertNotIn("r3", result)  # non-dict dropped
+        self.assertNotIn("r4", result)  # missing reply dropped
 
 
 if __name__ == "__main__":

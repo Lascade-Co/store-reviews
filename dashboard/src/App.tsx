@@ -240,7 +240,10 @@ export default function App() {
   async function sendAll() {
     const items = (payload?.reviews ?? [])
       .map((review) => ({ review, text: (drafts[reviewKey(review)] ?? "").trim() }))
-      .filter(({ review, text }) => text.length > 0 && !dispatched.has(reviewKey(review)))
+      .filter(
+        ({ review, text }) =>
+          text.length > 0 && !dispatched.has(reviewKey(review)) && !review.auto_replied,
+      )
     if (items.length === 0) return
     console.info(`[app] Send All clicked: ${items.length} repl${items.length === 1 ? "y" : "ies"}`)
     if (!getToken()) {
@@ -297,7 +300,9 @@ export default function App() {
   const reviews = payload?.reviews ?? []
   const sendableCount = reviews.filter(
     (review) =>
-      (drafts[reviewKey(review)] ?? "").trim().length > 0 && !dispatched.has(reviewKey(review)),
+      (drafts[reviewKey(review)] ?? "").trim().length > 0 &&
+      !dispatched.has(reviewKey(review)) &&
+      !review.auto_replied,
   ).length
 
   return (
@@ -379,9 +384,13 @@ export default function App() {
                 draft.trim() !== (review.suggested_reply ?? "").trim() ||
                 !review.suggested_reply
               const isDispatched = dispatched.has(key)
+              const isAutoReplied = review.auto_replied === true
               const limit = REPLY_LIMIT[review.platform]
+              // Auto-replied cards show the reply that was already sent, read-only.
+              const displayValue = isAutoReplied ? review.reply_text ?? "" : draft
               const atLimit = draft.length >= limit
-              const canRestore = !!review.suggested_reply && isCustom && !isDispatched
+              const canRestore =
+                !!review.suggested_reply && isCustom && !isDispatched && !isAutoReplied
               return (
                 <article
                   key={key}
@@ -448,12 +457,12 @@ export default function App() {
                     </div>
 
                     <Textarea
-                      value={draft}
+                      value={displayValue}
                       maxLength={limit}
                       onChange={(event) =>
                         setDrafts((prev) => ({ ...prev, [key]: event.target.value.slice(0, limit) }))
                       }
-                      disabled={isDispatched}
+                      disabled={isDispatched || isAutoReplied}
                       rows={4}
                       placeholder="Write a reply…"
                       className={`min-h-[100px] flex-1 resize-y rounded-lg bg-white text-xs leading-relaxed text-slate-800 shadow-sm focus:ring-1 ${
@@ -470,9 +479,13 @@ export default function App() {
                           atLimit ? "animate-limit-shake text-red-500" : "text-slate-400"
                         }`}
                       >
-                        {draft.length}/{limit} chars
+                        {displayValue.length}/{limit} chars
                       </span>
-                      {isDispatched ? (
+                      {isAutoReplied ? (
+                        <Badge className="bg-sky-100 text-sky-700 hover:bg-sky-100">
+                          <Sparkles className="mr-1 size-3" /> Auto replied
+                        </Badge>
+                      ) : isDispatched ? (
                         <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
                           <Check className="mr-1 size-3" /> Replied
                         </Badge>
