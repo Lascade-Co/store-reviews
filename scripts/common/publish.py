@@ -109,6 +109,24 @@ def _entry_is_pending(entry: dict, states: dict) -> bool:
     return True
 
 
+def _reconcile_status(entry: dict, states: dict) -> dict:
+    """Refresh an entry's status fields from the authoritative state.
+
+    State is the source of truth for whether a review was (auto-)replied; the
+    entry only carries the words. A carried-forward entry can be stale — e.g. a
+    review re-collected while Codex was down writes ``auto_replied: False`` even
+    though an earlier run already auto-replied it (state says ``True``). Without
+    this, the dashboard would show an already-replied review as an editable
+    pending one and invite a DUPLICATE reply. So trust state for the flag.
+    """
+    state = states.get(entry.get("platform"))
+    review = state.get("reviews", {}).get(entry.get("review_id")) if isinstance(state, dict) else None
+    if isinstance(review, dict) and review.get("auto_replied"):
+        entry["auto_replied"] = True
+        entry["replied"] = True
+    return entry
+
+
 def build_list(
     previous: dict | None,
     states: dict,
@@ -132,13 +150,13 @@ def build_list(
         if key in seen or not _entry_is_pending(entry, states):
             continue
         seen.add(key)
-        reviews.append(entry)
+        reviews.append(_reconcile_status(entry, states))
     for entry in new_entries:
         key = (entry.get("platform"), entry.get("review_id"))
         if key in seen or not _entry_is_pending(entry, states):
             continue
         seen.add(key)
-        reviews.append(entry)
+        reviews.append(_reconcile_status(entry, states))
     reviews.sort(key=lambda item: item.get("reviewed_at") or "", reverse=True)
     return {
         "app_details": app_details,
@@ -157,8 +175,9 @@ def notify_slack(new_count: int, app_details: dict, auto_count: int = 0) -> None
         return
     app_name = app_details.get("appname") or app_details.get("appcode", "")
     app_code = app_details.get("appcode", "")
-    # Only shown when the run auto-replied to some of the new reviews.
-    auto_line = f"*Auto-replied:* {auto_count}\n" if auto_count > 0 else ""
+    # Of the new reviews, how many the sync auto-handled vs. how many still need a
+    # human reply on the dashboard (derivable, but shown explicitly for clarity).
+    manual_count = max(new_count - auto_count, 0)
     try:
         slack = SlackClient()
         # Labelled fields (bold labels via *…*). Slack trims real leading/trailing
@@ -168,7 +187,8 @@ def notify_slack(new_count: int, app_details: dict, auto_count: int = 0) -> None
             f"*App Code:* {app_code}\n"
             f"*App Name:* {app_name}\n"
             f"*New Reviews:* {new_count}\n"
-            f"{auto_line}"
+            f"*Auto-replied:* {auto_count}\n"
+            f"*Needs manual reply:* {manual_count}\n"
             f"*Review URL:* {site}/?app={app_code}\n"
             f"⠀\n"
 

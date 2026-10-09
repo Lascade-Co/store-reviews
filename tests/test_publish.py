@@ -7,6 +7,7 @@ from common.publish import (
     decode_payload,
     encode_payload,
     notify_developer,
+    notify_slack,
     publish,
 )
 from common.review_sync import collect_new_reviews
@@ -81,6 +82,30 @@ class BuildListTests(unittest.TestCase):
 
         ids = {item["review_id"] for item in result["reviews"]}
         self.assertEqual(ids, {"keep1"})
+
+    def test_reconciles_stale_auto_replied_entry_from_state(self):
+        # Entry (carried from a stale R2 file) says not replied, but state is the
+        # authority and says it was auto-replied. Output must reflect state so the
+        # dashboard shows the badge, not an editable Reply button (no duplicate).
+        stale = entry("playstore", "r1", auto_replied=False, replied=False, reply_text=None)
+        states = {
+            "appstore": {"reviews": {}},
+            "playstore": {
+                "reviews": {
+                    "r1": {
+                        "auto_replied": True,
+                        "google_reply_sent": True,
+                        "last_sent_reply_hash": "h",
+                    }
+                }
+            },
+        }
+
+        result = build_list({"reviews": [stale]}, states, [], APP)
+
+        self.assertEqual(len(result["reviews"]), 1)
+        self.assertTrue(result["reviews"][0]["auto_replied"])
+        self.assertTrue(result["reviews"][0]["replied"])
 
     def test_deduplicates_and_sorts_newest_first(self):
         previous = {"reviews": [entry("appstore", "r1", reviewed_at="2026-09-01T00:00:00+00:00")]}
@@ -199,6 +224,24 @@ class CollectNewReviewsTests(unittest.TestCase):
 
         self.assertEqual([e["review_id"] for e in entries], ["r6", "r7"])  # oldest-first
         self.assertEqual(state["last_review_id"], "r7")
+
+
+class NotifySlackMessageTests(unittest.TestCase):
+    def test_message_includes_auto_and_manual_counts(self):
+        inst = Mock()
+        with patch.dict(os.environ, {"SITE_BASE_URL": "https://x.example"}), patch(
+            "common.publish.SlackClient", return_value=inst
+        ):
+            notify_slack(3, APP, 1)
+        text = inst.post_review.call_args.args[0]
+        self.assertIn("*New Reviews:* 3", text)
+        self.assertIn("*Auto-replied:* 1", text)
+        self.assertIn("*Needs manual reply:* 2", text)
+
+    def test_no_message_when_no_new_reviews(self):
+        with patch("common.publish.SlackClient") as slack:
+            notify_slack(0, APP, 0)
+        slack.assert_not_called()
 
 
 class DevPingTests(unittest.TestCase):
