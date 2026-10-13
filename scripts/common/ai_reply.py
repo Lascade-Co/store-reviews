@@ -77,7 +77,7 @@ For EVERY review, write a reply following these rules:
 - STRICT — never hallucinate: never invent facts, features, fixes, refunds, compensation, delivery timelines, or anything not stated in the review. Reply only to what the reviewer actually wrote.
 - Never request or mention personal data.
 - Never use placeholders such as [NAME] or [APP].
-- For a review about a booking, payment, refund, cancellation, or a specific order/trip problem: the booking is fulfilled directly by the travel provider, so politely explain that this is handled by the provider and ask the reviewer to contact the provider's support using the email in their booking confirmation, or via the provider's website. Do not promise an outcome. Do NOT use the word "aggregator".
+- For a review about a booking, payment, refund, cancellation, or a specific order/trip problem: the booking is fulfilled directly by the travel provider, so politely explain that this is handled by the provider and ask the reviewer to contact the provider's support using the email in their booking confirmation, or via the provider's website. Do not promise an outcome.
 - Keep the reply at most {limit} characters.
 
 For EACH review also classify:
