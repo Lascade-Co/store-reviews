@@ -10,14 +10,6 @@
         "c08b5208-c6bc-46b9-bdf7-048661f8bc2f",
         "cb11c1dc-a76a-47a8-af3c-9e770010766a"
     ],
-    "reviews": {
-        "3746945b-d154-400b-a10d-2e7c33e7abbd": {
-            "posted_at": "2026-10-13T09:15:25.324952+00:00",
-            "google_reply_sent": true,
-            "auto_replied": true,
-            "replied_at": "2026-10-13T09:15:25.324975+00:00",
-            "last_sent_reply_hash": "f199daa7fa36adf47bf943cf3cbb7dd0035610d0b65f768206f529eea80f9e2c"
-        }
-    },
+    "reviews": {},
     "baselined": true
 }
