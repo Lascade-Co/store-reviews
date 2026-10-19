@@ -1,16 +1,22 @@
 {
     "state_version": 2,
-    "last_review_id": "13dfc78c-868b-4a07-89ea-a22f091dc492",
-    "last_checked": "2026-10-02T23:56:13.951128+00:00",
+    "last_review_id": "fee9328e-b0c4-4aa9-9f6d-0f16c9b48526",
+    "last_checked": "2026-10-19T06:43:12.899850+00:00",
     "posted_ids": [
         "13dfc78c-868b-4a07-89ea-a22f091dc492",
+        "38e0f35e-6be2-48d2-8b6a-0766afdbfe08",
         "3b84a8ac-5a3c-4af1-afa8-511083f726f5",
         "c12ac68f-7096-4976-9dfa-bb589e28b67d",
-        "f0426af9-c281-43de-9237-9b53aa71d324"
+        "f0426af9-c281-43de-9237-9b53aa71d324",
+        "fee9328e-b0c4-4aa9-9f6d-0f16c9b48526"
     ],
     "reviews": {
-        "13dfc78c-868b-4a07-89ea-a22f091dc492": {
-            "posted_at": "2026-10-02T23:56:13.949985+00:00",
+        "38e0f35e-6be2-48d2-8b6a-0766afdbfe08": {
+            "posted_at": "2026-10-19T06:43:12.898282+00:00",
+            "google_reply_sent": false
+        },
+        "fee9328e-b0c4-4aa9-9f6d-0f16c9b48526": {
+            "posted_at": "2026-10-19T06:43:12.899150+00:00",
             "google_reply_sent": false
         }
     },
