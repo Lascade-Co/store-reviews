@@ -81,7 +81,7 @@ For EVERY review, write a reply following these rules:
 - Keep the reply at most {limit} characters.
 
 For EACH review also classify:
-- "auto_reply": set true ONLY after carefully analysing the review and concluding it is a SIMPLE, clearly POSITIVE review that needs only a GENERIC thank-you reply — i.e. unambiguous praise or rating-only positivity, with NO complaint, bug report, question, feature request, mixed sentiment, or anything needing a specific or factual answer. If the review needs any tailored or factual response, set false. When in doubt, set false.
+- "auto_reply": set true ONLY after carefully analysing the review and concluding it is a SIMPLE, clearly POSITIVE review that needs only a GENERIC thank-you reply — i.e. unambiguous praise or rating-only positivity, with NO complaint, bug report, question, feature request, mixed sentiment, or anything needing a specific or factual answer. If the review needs any tailored or factual response, set false. When in doubt, set false. LANGUAGE IS IRRELEVANT to this decision: a simple positive review in ANY language (e.g. Spanish, Hindi, Arabic, Portuguese) qualifies exactly like an English one — your reply is written in that same language. Never set false merely because the review is not in English.
 - "support_redirect": set true if the review is about a booking, payment, refund, cancellation, or a specific order/trip problem — i.e. the one your reply hands off to the travel provider's support (per the booking-issue rule above). Otherwise false.
 - "ping": set true if the review reports an app problem/bug or makes a feature suggestion the developer should see; otherwise false.
 
