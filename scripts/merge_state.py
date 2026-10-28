@@ -41,9 +41,18 @@ def merge_states(remote: dict, local: dict) -> dict:
     merged["reviews"] = reviews
 
     # posted_ids is the permanent dedup set; never lose an id from either side.
+    # Keep it newest-first without re-sorting: this run's local list carries the
+    # freshly-posted ids on top, so take it first and append any remote id it is
+    # missing, preserving each side's existing order.
     remote_posted = remote.get("posted_ids", []) or []
     local_posted = local.get("posted_ids", []) or []
-    merged["posted_ids"] = sorted(set(remote_posted) | set(local_posted))
+    seen: set = set()
+    merged_posted: list = []
+    for review_id in list(local_posted) + list(remote_posted):
+        if review_id not in seen:
+            seen.add(review_id)
+            merged_posted.append(review_id)
+    merged["posted_ids"] = merged_posted
 
     if _timestamp(local.get("last_checked")) >= _timestamp(remote.get("last_checked")):
         merged["last_review_id"] = local.get("last_review_id", remote.get("last_review_id"))

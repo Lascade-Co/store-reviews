@@ -52,6 +52,23 @@ class PruneStateTests(unittest.TestCase):
         state = prune({"r1": {"posted_at": days_ago(1)}}, posted_ids=["old1", "old2"])
         self.assertEqual(set(state["posted_ids"]), {"old1", "old2", "r1"})
 
+    def test_posted_ids_keep_order_newest_first(self):
+        # Existing ids keep their exact order (no re-sort); an active review id not
+        # yet recorded is recent, so it is prepended (top = newest).
+        state = prune(
+            {"newish": {"posted_at": days_ago(1)}},
+            posted_ids=["newest", "middle", "oldest"],
+        )
+        self.assertEqual(state["posted_ids"], ["newish", "newest", "middle", "oldest"])
+
+    def test_already_recorded_id_is_not_reordered(self):
+        # A review whose id is already in posted_ids must not be moved to the top.
+        state = prune(
+            {"middle": {"posted_at": days_ago(1)}},
+            posted_ids=["newest", "middle", "oldest"],
+        )
+        self.assertEqual(state["posted_ids"], ["newest", "middle", "oldest"])
+
 
 if __name__ == "__main__":
     unittest.main()

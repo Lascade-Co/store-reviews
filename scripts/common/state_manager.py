@@ -147,9 +147,14 @@ def upsert_review(state: dict, review_id: str, **values) -> None:
 
 
 def mark_posted(state: dict, review_id: str) -> None:
-    """Record a review id in the permanent dedup set (never pruned)."""
+    """Record a review id at the TOP of the permanent dedup set (never pruned).
+
+    posted_ids is kept newest-first: each new id is inserted at the front, so the
+    oldest ids settle at the bottom of the list and can be trimmed by hand once
+    they age out. Existing ids keep their relative order.
+    """
     ids = state.setdefault("posted_ids", [])
     if review_id not in ids:
-        ids.append(review_id)
+        ids.insert(0, review_id)
 
 

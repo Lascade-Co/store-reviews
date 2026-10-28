@@ -102,7 +102,9 @@ def collect_new_reviews(
     if initial_sync:
         # Baseline only: mark every existing review as seen (posted_ids), record
         # the boundary, and flag the app baselined — but post nothing this run.
-        for review in reviews:
+        # Walk oldest-first so that, with mark_posted prepending, the newest
+        # review ends up at the top of posted_ids (newest-first ordering).
+        for review in reversed(reviews):
             mark_posted(state, review_id_getter(review))
         if reviews:
             state["last_review_id"] = review_id_getter(reviews[0])

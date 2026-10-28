@@ -44,13 +44,17 @@ class StateMergeTests(unittest.TestCase):
         self.assertEqual(merged["reviews"]["r1"]["replied_at"], "2026-07-29T08:04:00+00:00")
         self.assertEqual(merged["reviews"]["r1"]["last_sent_reply_hash"], "hash-4")
 
-    def test_merge_unions_posted_ids(self):
-        remote = {"posted_ids": ["a", "b"], "reviews": {}}
-        local = {"posted_ids": ["b", "c"], "reviews": {}}
+    def test_merge_unions_posted_ids_newest_first(self):
+        # posted_ids is newest-first. local carries this run's new ids on top, so
+        # it is taken first; remote ids it lacks are appended, order preserved.
+        remote = {"posted_ids": ["b", "a"], "reviews": {}}
+        local = {"posted_ids": ["c", "b", "a"], "reviews": {}}
 
         merged = merge_states(remote, local)
 
-        self.assertEqual(merged["posted_ids"], ["a", "b", "c"])
+        self.assertEqual(merged["posted_ids"], ["c", "b", "a"])
+        # No id is ever lost from either side.
+        self.assertEqual(set(merged["posted_ids"]), {"a", "b", "c"})
 
 
 if __name__ == "__main__":

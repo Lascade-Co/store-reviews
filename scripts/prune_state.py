@@ -41,10 +41,9 @@ def _age_days(timestamp: object, now: datetime) -> float:
 
 def prune_inactive(state: dict, now: datetime) -> dict:
     """Return state with inactive reviews removed from `reviews` (ids kept in `posted_ids`)."""
-    posted = set(state.get("posted_ids", []) or [])
+    all_review_ids = list((state.get("reviews", {}) or {}).keys())
     kept = {}
     for review_id, entry in (state.get("reviews", {}) or {}).items():
-        posted.add(review_id)  # never lose the id — dedup must be permanent
         if not isinstance(entry, dict):
             continue
         if entry.get("replied_at"):
@@ -54,7 +53,15 @@ def prune_inactive(state: dict, now: datetime) -> dict:
             if _age_days(entry.get("posted_at"), now) <= OPEN_POLL_WINDOW_DAYS:
                 kept[review_id] = entry  # open & recent → keep on the dashboard
     state["reviews"] = kept
-    state["posted_ids"] = sorted(posted)
+
+    # posted_ids is the permanent dedup set, kept newest-first so the oldest ids
+    # sit at the bottom and can be trimmed by hand later. Preserve the existing
+    # order untouched (do NOT re-sort); never lose a review's id — any active id
+    # not already recorded is a recent review, so it goes on top.
+    existing = state.get("posted_ids", []) or []
+    seen = set(existing)
+    missing = [rid for rid in all_review_ids if rid not in seen]
+    state["posted_ids"] = missing + list(existing)
     return state
 
 

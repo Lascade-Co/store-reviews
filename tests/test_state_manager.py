@@ -5,7 +5,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from common.state_manager import load_state, save_state
+from common.state_manager import load_state, mark_posted, save_state
+
+
+class MarkPostedTests(unittest.TestCase):
+    def test_new_ids_are_prepended_newest_first(self):
+        state = {"posted_ids": ["old2", "old1"]}
+        mark_posted(state, "new1")
+        mark_posted(state, "new2")
+        # Newest on top, existing order untouched below.
+        self.assertEqual(state["posted_ids"], ["new2", "new1", "old2", "old1"])
+
+    def test_duplicate_id_is_not_added_again(self):
+        state = {"posted_ids": ["a", "b"]}
+        mark_posted(state, "a")
+        self.assertEqual(state["posted_ids"], ["a", "b"])
 
 
 class StateManagerTests(unittest.TestCase):
