@@ -42,6 +42,13 @@ DEFAULT_EMBED_MODEL = "intfloat/multilingual-e5-base"
 DEFAULT_TOP_K = 3
 DEFAULT_MIN_SIMILARITY = 0.80
 
+# Examples are prompt context, not stored content, so clip them to keep the
+# Codex prompt bounded no matter how long a reviewed/replied text was.
+EXAMPLE_REVIEW_MAX_CHARS = 280
+EXAMPLE_REPLY_MAX_CHARS = 340
+# Reviews with no real text retrieve nothing useful; skip them.
+_EMPTY_QUERIES = {"", "no review text provided."}
+
 # Sentinel so a failed model load is remembered and never retried in-process.
 _UNSET = object()
 _MODEL = _UNSET
@@ -130,6 +137,11 @@ def review_text_of(platform_rating_title_body: dict) -> str:
     return (f"{title}\n{body}" if title else body).strip()
 
 
+def _clip(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
 # --------------------------------------------------------------------------- #
 # Capture
 # --------------------------------------------------------------------------- #
@@ -153,6 +165,8 @@ def record_reply(
     reply_text = (reply_text or "").strip()
     if not app_code or not platform or not review_id or not review_text or not reply_text:
         return
+    if review_text.lower() in _EMPTY_QUERIES:
+        return  # rating-only / placeholder review — nothing to match on later
     try:
         corpus.write_pair(
             app_code,
@@ -189,26 +203,45 @@ def refresh_index(app_code: str) -> None:
         items = index.get("items") if isinstance(index.get("items"), list) else []
 
         # A model change invalidates every stored vector — re-embed from scratch.
-        rebuild = bool(items) and indexed_model != current_model
-        known = set() if rebuild else {it.get("key") for it in items}
-        kept = [] if rebuild else list(items)
+        model_changed = bool(items) and indexed_model != current_model
+        existing = (
+            {}
+            if model_changed
+            else {it.get("key"): it for it in items if isinstance(it, dict)}
+        )
 
-        pending_meta: list[dict] = []
+        kept: list[dict] = []        # unchanged items reused as-is (keep their vector)
+        pending_meta: list[dict] = []  # new or changed pairs needing (re)embedding
         pending_text: list[str] = []
+        seen_keys: set = set()
         for pair in corpus.iter_pairs(app_code):
-            key = corpus.pair_hash(pair.get("platform", ""), pair.get("review_id", ""))
-            if key in known:
-                continue
-            known.add(key)
+            platform = pair.get("platform", "")
+            review_id = pair.get("review_id", "")
+            key = corpus.pair_hash(platform, review_id)
+            if key in seen_keys:
+                continue  # duplicate pair object; first one wins
+            seen_keys.add(key)
             review_text = (pair.get("review_text") or "").strip()
             reply_text = (pair.get("reply_text") or "").strip()
             if not review_text or not reply_text:
                 continue
+            prev = existing.get(key)
+            # Reuse the stored vector only when the text AND reply are unchanged;
+            # an edited reply (same review_id, re-captured) must be re-embedded so
+            # the index never serves a stale reply.
+            if (
+                isinstance(prev, dict)
+                and prev.get("review_text") == review_text
+                and prev.get("reply_text") == reply_text
+                and isinstance(prev.get("embedding"), list)
+            ):
+                kept.append(prev)
+                continue
             pending_meta.append(
                 {
                     "key": key,
-                    "platform": pair.get("platform"),
-                    "review_id": pair.get("review_id"),
+                    "platform": platform,
+                    "review_id": review_id,
                     "rating": pair.get("rating"),
                     "review_text": review_text,
                     "reply_text": reply_text,
@@ -216,7 +249,10 @@ def refresh_index(app_code: str) -> None:
             )
             pending_text.append(review_text)
 
-        if not pending_meta and not rebuild:
+        # Changed when anything is new/edited, when items were dropped (a pair
+        # object deleted), or when the model changed.
+        changed = bool(pending_meta) or len(kept) != len(items) or model_changed
+        if not changed:
             LOG.info("RAG: corpus index for %s already current (%d item(s))", app_code, len(kept))
             _cache_index(app_code, current_model, kept)
             return
@@ -261,17 +297,21 @@ def _ensure_cache(app_code: str) -> dict | None:
 # --------------------------------------------------------------------------- #
 # Retrieval (generation)
 # --------------------------------------------------------------------------- #
-def _select_examples(items, matrix, query_vec, top_k, min_sim, exclude_review_id=None):
+def _select_examples(items, matrix, query_vec, top_k, min_sim, exclude_review_id=None, query_text=None):
     """Pure top-k cosine selection over a normalized embedding matrix.
 
     ``matrix`` rows and ``query_vec`` are unit vectors, so cosine == dot product.
-    Returns a list of {"review", "reply"} dicts, most similar first.
+    Returns a list of clipped {"review", "reply"} dicts, most similar first,
+    skipping the review's own past reply, any example identical to the review
+    being answered (verbatim-copy risk), and duplicate pairs.
     """
     if matrix is None or query_vec is None or not len(items):
         return []
+    query_norm = (query_text or "").strip().lower()
     sims = matrix.dot(query_vec)
     order = list(np.argsort(sims)[::-1])
     chosen = []
+    seen: set = set()
     for idx in order:
         if len(chosen) >= top_k:
             break
@@ -280,7 +320,17 @@ def _select_examples(items, matrix, query_vec, top_k, min_sim, exclude_review_id
         item = items[idx]
         if exclude_review_id is not None and item.get("review_id") == exclude_review_id:
             continue  # never show a review its own past reply
-        chosen.append({"review": item["review_text"], "reply": item["reply_text"]})
+        review = (item.get("review_text") or "").strip()
+        reply = (item.get("reply_text") or "").strip()
+        if not review or not reply:
+            continue
+        if query_norm and review.lower() == query_norm:
+            continue  # identical review — would invite a verbatim copy
+        dedup = (review.lower(), reply.lower())
+        if dedup in seen:
+            continue
+        seen.add(dedup)
+        chosen.append({"review": _clip(review, EXAMPLE_REVIEW_MAX_CHARS), "reply": _clip(reply, EXAMPLE_REPLY_MAX_CHARS)})
     return chosen
 
 
@@ -298,14 +348,18 @@ def attach_examples(app_code: str, items: list[dict]) -> list[dict]:
         cache = _ensure_cache(app_code)
         if not cache or not cache["items"] or cache["matrix"] is None:
             return items
-        query_vecs = _embed([review_text_of(it) for it in items], kind="query")
+        query_texts = [review_text_of(it) for it in items]
+        query_vecs = _embed(query_texts, kind="query")
         if query_vecs is None:
             return items
         top_k, min_sim = _top_k(), _min_similarity()
-        for item, qvec in zip(items, query_vecs):
+        for item, qtext, qvec in zip(items, query_texts, query_vecs):
+            if qtext.strip().lower() in _EMPTY_QUERIES:
+                continue  # rating-only / empty review — nothing meaningful to match
             examples = _select_examples(
                 cache["items"], cache["matrix"], qvec, top_k, min_sim,
                 exclude_review_id=str(item.get("id") or ""),
+                query_text=qtext,
             )
             if examples:
                 item["examples"] = examples

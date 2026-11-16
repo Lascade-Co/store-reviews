@@ -29,6 +29,8 @@ def _store_pair(app_code: str, platform: str, review_id: str, review_text: str, 
     reply_text = (reply_text or "").strip()
     if not review_id or not review_text or not reply_text:
         return False
+    if review_text.lower() in {"", "no review text provided."}:
+        return False  # rating-only review — no text to match on
     corpus.write_pair(
         app_code,
         {
