@@ -78,6 +78,7 @@ For EVERY review, write a reply following these rules:
 - Never request or mention personal data.
 - Never use placeholders such as [NAME] or [APP].
 - For a review about a booking, payment, refund, cancellation, or a specific order/trip problem: the booking is fulfilled directly by the travel provider, so politely explain that this is handled by the provider and ask the reviewer to contact the provider's support using the email in their booking confirmation, or via the provider's website. Do not promise an outcome.
+- Some reviews include an "examples" list of past HUMAN replies to SIMILAR reviews of this app. Use them ONLY as a guide to the team's tone, voice, and structure. Do NOT copy them verbatim, and do NOT reuse their specific facts unless the current review states the same thing. When no examples are given, reply normally.
 - Keep the reply at most {limit} characters.
 
 For EACH review also classify:
@@ -123,6 +124,19 @@ def generate_suggested_replies(reviews: list[dict]) -> dict[str, dict]:
         }
         for review in reviews
     ]
+
+    # RAG: attach similar past human replies as style references (best-effort —
+    # degrades to no examples if the corpus/model is unavailable). Keyed by the
+    # app being synced; APP_CODE is set by the workflow.
+    try:
+        from common import rag
+
+        app_code = os.environ.get("APP_CODE", "").strip()
+        if app_code:
+            rag.attach_examples(app_code, payload)
+    except Exception:
+        LOG.warning("RAG example attachment failed; continuing without examples", exc_info=True)
+
     prompt = PROMPT_TEMPLATE.format(
         limit=MAX_SUGGESTED_REPLY_LENGTH,
         output=OUTPUT_FILENAME,

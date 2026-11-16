@@ -87,6 +87,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+      - name: Cache RAG embedding model
+        # The multilingual embedding model is downloaded once and reused. Cache
+        # the HuggingFace store so later runs skip the download. A cache miss (or
+        # RAG disabled) just means a slower first run; RAG stays failure-safe.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: rag-hf-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            rag-hf-
       - name: Restore Codex auth.json
         # AI-suggested replies use the org Codex CLI authenticated by the shared
         # ChatGPT plan (no per-token OpenAI key). Same pattern as
@@ -157,6 +167,12 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_DATA_PREFIX: ${{ secrets.R2_DATA_PREFIX }}
           SITE_BASE_URL: ${{ secrets.SITE_BASE_URL }}
+          # RAG suggested-reply retrieval. On by default; set RAG_ENABLED=false
+          # (repo/org variable) to turn it off. RAG_EMBED_MODEL overrides the
+          # default multilingual model. Reads/writes the corpus via the R2_* vars
+          # already set above.
+          RAG_ENABLED: ${{ vars.RAG_ENABLED || 'true' }}
+          RAG_EMBED_MODEL: ${{ vars.RAG_EMBED_MODEL }}
         run: python scripts/main.py
       - name: Upload State
         if: always()
