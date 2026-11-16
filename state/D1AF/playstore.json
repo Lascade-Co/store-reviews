@@ -18,27 +18,6 @@
         "f0426af9-c281-43de-9237-9b53aa71d324",
         "fee9328e-b0c4-4aa9-9f6d-0f16c9b48526"
     ],
-    "reviews": {
-        "5240ca85-89ed-49b1-9314-3a2779ad6f68": {
-            "posted_at": "2026-11-06T01:02:25.037085+00:00",
-            "google_reply_sent": false
-        },
-        "1a63ea05-2ea0-400c-b875-d61087848e57": {
-            "posted_at": "2026-11-06T01:02:25.051198+00:00",
-            "google_reply_sent": false
-        },
-        "51b9b5d3-b4ce-4a01-9aef-0b6d338effa1": {
-            "posted_at": "2026-11-07T00:11:45.995512+00:00",
-            "google_reply_sent": false
-        },
-        "2e616fb3-7d7d-41ab-b779-658199123bc1": {
-            "posted_at": "2026-11-07T00:11:45.996593+00:00",
-            "google_reply_sent": false
-        },
-        "7ed1c4cb-4ac2-4c57-a52e-1918a96d835c": {
-            "posted_at": "2026-11-07T00:11:45.997396+00:00",
-            "google_reply_sent": false
-        }
-    },
+    "reviews": {},
     "baselined": true
 }
