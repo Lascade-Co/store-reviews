@@ -3,8 +3,3 @@ PyJWT==2.10.1
 cryptography==45.0.6
 google-auth==2.52.0
 boto3
-# RAG suggested-reply retrieval (optional at runtime; the code degrades to no
-# examples if these are missing). sentence-transformers pulls in torch — cached
-# by the workflow's pip cache + the HuggingFace model cache.
-sentence-transformers
-numpy

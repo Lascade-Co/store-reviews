@@ -31,17 +31,6 @@ def main():
         app_details["appname"],
     )
 
-    # RAG: fold any newly-captured human replies into the corpus index before
-    # generation reads it. Best-effort — a no-op when nothing new was captured,
-    # when the feature is off, or when the embedding model is unavailable.
-    if app_code:
-        try:
-            from common import rag
-
-            rag.refresh_index(app_code)
-        except Exception:
-            LOG.warning("RAG corpus refresh failed; continuing without it", exc_info=True)
-
     appstore_entries, appstore_state, appstore_pings = run_appstore_collect()
     playstore_entries, playstore_state, playstore_pings = run_playstore_collect()
     publish(

@@ -109,40 +109,6 @@ def _resolve_items() -> list[dict] | None:
     ]
 
 
-def _capture_replies(app_code: str, previous: dict | None, sent_items: list[dict]) -> None:
-    """Record each just-sent human reply in the RAG corpus (best-effort).
-
-    The review text comes from the previous dashboard payload (the only place it
-    is kept — git state stores no review content). A review already pruned off
-    the dashboard is simply skipped. Never raises.
-    """
-    if not sent_items:
-        return
-    try:
-        from common import rag
-    except Exception:
-        return
-    by_key = {}
-    for entry in (previous or {}).get("reviews", []) or []:
-        if isinstance(entry, dict):
-            by_key[(entry.get("platform"), entry.get("review_id"))] = entry
-    for item in sent_items:
-        platform = (item.get("platform") or "").strip()
-        review_id = (item.get("review_id") or "").strip()
-        entry = by_key.get((platform, review_id))
-        if not entry:
-            continue
-        rag.record_reply(
-            app_code,
-            platform,
-            review_id,
-            rag.review_text_of(entry),
-            item.get("reply_text", ""),
-            rating=entry.get("rating"),
-            source="dashboard",
-        )
-
-
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     app_code = os.environ.get("APP_CODE", "").strip()
@@ -159,7 +125,6 @@ def main() -> int:
     replier = _make_replier()
     sent = skipped = 0
     failures: list[str] = []
-    sent_items: list[dict] = []
     for item in items:
         if not isinstance(item, dict):
             LOG.error("Reply item is not an object: %r", item)
@@ -180,7 +145,6 @@ def main() -> int:
             continue
         if result == "sent":
             sent += 1
-            sent_items.append(item)
         elif result == "skipped":
             skipped += 1
         else:
@@ -200,11 +164,7 @@ def main() -> int:
         "appcode": app_code,
         "infisical_slug": os.environ.get("APP_INFISICAL_SLUG", "").strip(),
     }
-    previous = download_current(app_code)
-    # Capture the human replies into the RAG corpus (best-effort) before the
-    # review drops off the dashboard — the previous payload still holds its text.
-    _capture_replies(app_code, previous, sent_items)
-    payload = build_list(previous, states, [], app_details)
+    payload = build_list(download_current(app_code), states, [], app_details)
     upload(payload, app_code)
 
     # Success (so the commit step runs and persists state) when at least one
