@@ -1,0 +1,7 @@
+name: Seal policy
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  policy:
+    uses: Lascade-Co/actions/.github/workflows/seal-policy.yml@seal-v1

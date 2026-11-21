@@ -62,6 +62,10 @@ concurrency:
   group: reply-${{ inputs.app_code }}-${{ inputs.review_id || 'all' }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: seal-bash-e {0}
+
 jobs:
   reply:
     name: Send Reply and Update State
@@ -72,6 +76,8 @@ jobs:
     env:
       APP_CODE: ${{ inputs.app_code }}
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -169,3 +175,5 @@ jobs:
 
           echo "Unable to push state after 4 attempts."
           exit 1
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

@@ -21,6 +21,10 @@ on:
     # previous day). Same time for every app.
     - cron: "30 20 * * *"
 
+defaults:
+  run:
+    shell: seal-bash-e {0}
+
 jobs:
   set-matrix:
     name: Resolve app list
@@ -28,6 +32,8 @@ jobs:
     outputs:
       apps: ${{ steps.load.outputs.apps }}
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Build matrix from apps.json (or the single manual appcode)
@@ -47,6 +53,8 @@ jobs:
           fi
           echo "Resolved apps: ${apps}"
           echo "apps=${apps}" >> "$GITHUB_OUTPUT"
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   sync:
     # Web-dashboard mode: both providers run sequentially in ONE job so a
@@ -74,6 +82,8 @@ jobs:
       # that instead. Empty secret -> "false" -> Codex steps skip, sync runs on.
       HAS_CODEX: ${{ secrets.CODEX_AUTH_JSON_BASE_64 != '' }}
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -158,13 +168,21 @@ jobs:
           R2_DATA_PREFIX: ${{ secrets.R2_DATA_PREFIX }}
           SITE_BASE_URL: ${{ secrets.SITE_BASE_URL }}
         run: python scripts/main.py
+      - name: Seal State
+        if: always()
+        env:
+          APP_CODE: ${{ matrix.app.appcode }}
+        run: seal-pack --allow-empty "${APP_CODE}-state" "state/${APP_CODE}/"
       - name: Upload State
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.app.appcode }}-state
-          path: state/${{ matrix.app.appcode }}/
+          path: ${{ runner.temp }}/seal/art/${{ matrix.app.appcode }}-state/
+          retention-days: 7
           if-no-files-found: warn
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 
   commit-state:
     # ONE commit job for the whole run (not one per app). It downloads every
@@ -181,17 +199,32 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
       - name: Download all app state artifacts
         if: always()
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
-          # No name -> all artifacts, each under /tmp/state-artifacts/<appcode>-state/
+          # Every app's state artifact (not the sealed-log-* ones), each under
+          # /tmp/state-artifacts/<appcode>-state/ as <appcode>-state.tgz.age.
+          pattern: '*-state'
           path: /tmp/state-artifacts
         continue-on-error: true
+      - name: Unseal app state artifacts
+        # Extracts each sealed archive in place (appstore.json/playstore.json at
+        # the dir root) and deletes the .age file. No artifacts -> no-op. A
+        # failed unseal fails the step so no encrypted file is ever committed.
+        env:
+          REPO_AGE_KEY: ${{ secrets.REPO_AGE_KEY }}
+        run: |
+          shopt -s nullglob
+          for dir in /tmp/state-artifacts/*-state; do
+            seal-unpack "${dir}"
+          done
       - name: Commit Updated State
         run: |
           set -euo pipefail
@@ -284,3 +317,5 @@ jobs:
 
           echo "Unable to push state after 4 attempts."
           exit 1
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1

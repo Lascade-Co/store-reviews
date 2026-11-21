@@ -6,3 +6,8 @@
 The caller supplies `base_path: dashboard`; `dashboard/wrangler.json` owns the target.
 Use the tracked npm lockfile. Production fetches R2 directly, so verify browser
 CORS for the deployed origin. Keep `SITE_BASE_URL` aligned with the Pages URL.
+
+# Sealed output
+
+CI output is sealed (encrypted to the repo key) so this repo can be public.
+Follow the "Sealed output" rules in `CLAUDE.md` when editing `.github/workflows/`.
