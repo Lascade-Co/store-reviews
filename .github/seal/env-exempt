@@ -1,0 +1,1 @@
+dashboard-deploy.yml:deploy  # cross-repo static-pages trigger; CI_APP_* stay repo-level

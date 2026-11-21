@@ -70,6 +70,7 @@ jobs:
   reply:
     name: Send Reply and Update State
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 10
     permissions:
       contents: write

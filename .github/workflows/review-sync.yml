@@ -68,6 +68,7 @@ jobs:
       matrix:
         app: ${{ fromJson(needs.set-matrix.outputs.apps) }}
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 15
     permissions:
       contents: read
@@ -195,6 +196,7 @@ jobs:
     needs: [set-matrix, sync]
     if: ${{ always() && needs.set-matrix.result == 'success' }}
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 15
     permissions:
       contents: write
