@@ -73,16 +73,27 @@ jobs:
     environment: production
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
     env:
       APP_CODE: ${{ inputs.app_code }}
     steps:
       - name: Seal job output
         uses: Lascade-Co/actions/actions/seal@seal-v1
+      # Reviewed main blocks direct pushes except from the CI App (a ruleset bypass actor),
+      # so the state commit pushes with an App token, not GITHUB_TOKEN.
+      - name: Create CI App token
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ secrets.CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: Lascade-Co
+          repositories: store-reviews
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
       - name: Resolve app from apps.json
         # The dashboard only knows the appcode; look up the matching Infisical
         # slug (to fetch secrets) and display name from apps.json.
