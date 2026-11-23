@@ -4,30 +4,35 @@
       "appname": "Airlines70",
       "appcode": "D1AS_D1IS",
       "infisical_slug": "airlines70",
+      "type": "flight",
       "autoreply": false
     },
     {
       "appname": "Flight Deals",
       "appcode": "M4AS_M4IS",
       "infisical_slug": "flight_deals",
+      "type": "flight",
       "autoreply": true
     },
     {
       "appname": "Flights70",
       "appcode": "D1AF",
       "infisical_slug": "d1_android_flight",
+      "type": "flight",
       "autoreply": false
     },
     {
       "appname": "Hotels70",
       "appcode": "D1AH",
       "infisical_slug": "d1_android_hotel",
+      "type": "hotel",
       "autoreply": false
     },
     {
       "appname": "Rent80",
       "appcode": "D1AC",
       "infisical_slug": "d1_android_car",
+      "type": "car",
       "autoreply": false
     }
   ]

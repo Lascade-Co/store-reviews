@@ -10,8 +10,9 @@ import os
 
 from common.ai_reply import generate_suggested_replies
 from common.jwt_generator import generate_token
+from common.rag import retrieve_examples
 from common.review_sync import collect_new_reviews
-from common.state_manager import load_state, now_iso
+from common.state_manager import load_state, now_iso, save_state
 from common.utils import env_flag, request_with_retries
 
 
@@ -35,14 +36,29 @@ def _validate_review(review: object) -> None:
         raise RuntimeError(f"Apple review {review['id']} has an invalid rating")
 
 
+def _has_developer_reply(review: dict) -> bool:
+    """True when the review already carries a developer response.
+
+    Requires the list call to include ``?include=response`` (see fetch_reviews):
+    an answered review then has ``relationships.response.data`` set.
+    """
+    if not isinstance(review, dict):
+        return False
+    response = (review.get("relationships") or {}).get("response") or {}
+    return bool(response.get("data"))
+
+
 def fetch_reviews(token: str, stop_at_id: str | None = None, max_pages: int = PAGE_CAP) -> list[dict]:
     """Fetch Apple reviews, following pagination until the boundary or the cap.
 
     Apple sorts by createdDate (immutable), so once ``stop_at_id`` appears in a
-    page everything older is already known and paging can stop.
+    page everything older is already known and paging can stop. ``include=response``
+    asks for each review's developer response relationship so already-answered
+    reviews (e.g. replied in App Store Connect) can be dropped from the dashboard,
+    mirroring the Google Play behaviour.
     """
     url = f"{APPLE_API}/apps/{os.environ['APPSTORE_APPLE_ID']}/customerReviews"
-    params = {"limit": 200, "sort": "-createdDate"}
+    params = {"limit": 200, "sort": "-createdDate", "include": "response"}
     reviews: list[dict] = []
     pages = 0
     stopped_early = False
@@ -127,18 +143,35 @@ def _review_id(review: dict) -> str:
     return review["id"]
 
 
-def _suggest_batch(new_reviews: list[dict]) -> dict[str, dict]:
-    """One Codex call for all new App Store reviews → {review_id: {reply, auto_reply, ping}}."""
-    items = [
-        {
-            "id": review["id"],
-            "platform": "Apple App Store",
-            "rating": review.get("attributes", {}).get("rating", 0),
-            "title": str(review.get("attributes", {}).get("title") or "").strip() or "No Title",
-            "body": str(review.get("attributes", {}).get("body") or "").strip() or "No review text provided.",
-        }
-        for review in new_reviews
-    ]
+def _suggest_batch(new_reviews: list[dict]) -> dict[str, str]:
+    """RAG-gate each new review, then one Codex call → {review_id: reply_text}.
+
+    Only reviews that clear the gate (>= K similar human replies) are sent to
+    Codex with those examples attached; the rest get no suggestion and go to the
+    dashboard for a human to write from scratch.
+    """
+    app = os.environ.get("APP_CODE", "").strip()
+    app_type = os.environ.get("APP_TYPE", "").strip()
+    items = []
+    for review in new_reviews:
+        attr = review.get("attributes", {})
+        rating = attr.get("rating", 0)
+        body = str(attr.get("body") or "").strip() or "No review text provided."
+        examples = retrieve_examples(body, app=app, type=app_type, rating=rating)
+        if not examples:
+            continue  # gate closed → no suggestion → manual (seeds the corpus)
+        items.append(
+            {
+                "id": review["id"],
+                "platform": "Apple App Store",
+                "rating": rating,
+                "title": str(attr.get("title") or "").strip() or "No Title",
+                "body": body,
+                "examples": examples,
+            }
+        )
+    if not items:
+        return {}
     return generate_suggested_replies(items)
 
 
@@ -170,11 +203,11 @@ REQUIRED_APPSTORE_ENV = (
 )
 
 
-def run_appstore_collect() -> tuple[list[dict], dict, list[dict]]:
-    """Fetch + record new reviews in state, return (entries, state, ping items)."""
+def run_appstore_collect() -> tuple[list[dict], dict]:
+    """Fetch + record new reviews in state, return (entries, state)."""
     if not all(os.environ.get(name) for name in REQUIRED_APPSTORE_ENV):
         LOG.info("App Store not configured for this app; skipping")
-        return [], load_state("appstore"), []
+        return [], load_state("appstore")
 
     LOG.info("Generating App Store Connect JWT")
     token = generate_token()
@@ -191,7 +224,18 @@ def run_appstore_collect() -> tuple[list[dict], dict, list[dict]]:
         reviews = fetch_reviews(token, stop_at_id=state.get("last_review_id"))
     LOG.info("Fetched %d review(s)", len(reviews))
 
-    pings: list[dict] = []
+    # Reviews already answered at the store (e.g. via App Store Connect) carry a
+    # developer response relationship; flag them so they never appear as pending.
+    flags_changed = False
+    for review in reviews:
+        review_id = _review_id(review)
+        entry = state.get("reviews", {}).get(review_id)
+        if entry is not None and _has_developer_reply(review) and not entry.get("apple_reply_sent"):
+            entry["apple_reply_sent"] = True
+            flags_changed = True
+    if flags_changed:
+        save_state("appstore", state)
+
     entries = collect_new_reviews(
         "appstore",
         reviews,
@@ -200,12 +244,12 @@ def run_appstore_collect() -> tuple[list[dict], dict, list[dict]]:
         _review_id,
         normalize_entry,
         "apple_reply_sent",
+        reply_sent_getter=_has_developer_reply,
         # createdDate order is immutable, so stopping the scan at the
         # last_review_id boundary is safe for Apple (unlike Google).
         stop_at_boundary=True,
         suggestion_generator=_suggest_batch,
         reply_sender=lambda review_id, text: reply_to_review(token, review_id, text),
         auto_reply_enabled=env_flag("APP_AUTO_REPLY"),
-        ping_sink=pings,
     )
-    return entries, state, pings
+    return entries, state

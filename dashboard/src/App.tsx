@@ -215,6 +215,8 @@ export default function App() {
         platform: review.platform,
         review_id: review.review_id,
         reply_text: text,
+        // Human-authored unless it exactly matches the untouched AI suggestion.
+        is_human: text !== (review.suggested_reply ?? "").trim(),
       })
       setDispatched((prev) => new Set(prev).add(key))
       toast.add({
@@ -259,6 +261,7 @@ export default function App() {
           platform: review.platform,
           review_id: review.review_id,
           reply_text: text,
+          is_human: text !== (review.suggested_reply ?? "").trim(),
         })),
       )
       setDispatched((prev) => {

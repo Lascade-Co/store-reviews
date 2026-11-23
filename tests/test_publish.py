@@ -6,7 +6,6 @@ from common.publish import (
     build_list,
     decode_payload,
     encode_payload,
-    notify_developer,
     notify_slack,
     publish,
 )
@@ -242,42 +241,6 @@ class NotifySlackMessageTests(unittest.TestCase):
         with patch("common.publish.SlackClient") as slack:
             notify_slack(0, APP, 0)
         slack.assert_not_called()
-
-
-class DevPingTests(unittest.TestCase):
-    PINGS = [
-        {"review_id": "r1", "platform": "playstore", "rating": 2, "title": None, "body": "crashes on launch"},
-    ]
-
-    def test_skips_when_no_dev_id(self):
-        with patch.dict(os.environ, {}, clear=False), patch("common.publish.SlackClient") as slack:
-            os.environ.pop("SLACK_DEV_ID", None)
-            notify_developer(APP, self.PINGS)
-        slack.assert_not_called()
-
-    def test_skips_when_no_pings(self):
-        with patch.dict(os.environ, {"SLACK_DEV_ID": "U123"}), patch("common.publish.SlackClient") as slack:
-            notify_developer(APP, [])
-        slack.assert_not_called()
-
-    def test_posts_mention_and_body_when_dev_id_present(self):
-        inst = Mock()
-        with patch.dict(os.environ, {"SLACK_DEV_ID": "U123"}), patch(
-            "common.publish.SlackClient", return_value=inst
-        ) as slack:
-            notify_developer(APP, self.PINGS)
-        slack.assert_called_once()
-        text = inst.post_review.call_args.args[0]
-        self.assertIn("<@U123>", text)
-        self.assertIn("crashes on launch", text)
-
-    def test_slack_failure_is_swallowed(self):
-        inst = Mock()
-        inst.post_review.side_effect = RuntimeError("boom")
-        with patch.dict(os.environ, {"SLACK_DEV_ID": "U123"}), patch(
-            "common.publish.SlackClient", return_value=inst
-        ):
-            notify_developer(APP, self.PINGS)  # must not raise
 
 
 if __name__ == "__main__":

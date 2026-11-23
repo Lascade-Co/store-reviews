@@ -43,6 +43,14 @@ on:
         description: "Single mode: the reply to publish"
         required: false
         type: string
+      is_human:
+        # Single mode: true when the operator wrote/edited the reply (vs. accepting
+        # an AI suggestion unchanged). Only human replies seed the RAG corpus. In
+        # batch mode the per-item "is_human" inside `replies` is used instead.
+        description: "Single mode: the reply was written/edited by a human"
+        required: false
+        type: boolean
+        default: false
 
 # Single mode uses a per-REVIEW group so replies to different reviews run in
 # parallel and never cancel each other (GitHub keeps only one pending run per
@@ -107,6 +115,7 @@ jobs:
           fi
           echo "infisical_slug=$(echo "${obj}" | jq -r '.infisical_slug')" >> "$GITHUB_OUTPUT"
           echo "appname=$(echo "${obj}" | jq -r '.appname')" >> "$GITHUB_OUTPUT"
+          echo "type=$(echo "${obj}" | jq -r '.type // ""')" >> "$GITHUB_OUTPUT"
       - name: Setup Python
         uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
         with:
@@ -131,11 +140,15 @@ jobs:
         env:
           APP_NAME: ${{ steps.app.outputs.appname }}
           APP_INFISICAL_SLUG: ${{ steps.app.outputs.infisical_slug }}
+          # App category (flight/car/hotel) stored with each captured corpus pair.
+          APP_TYPE: ${{ steps.app.outputs.type }}
           REPLY_ALL: ${{ inputs.reply_all }}
           REPLIES: ${{ inputs.replies }}
           PLATFORM: ${{ inputs.platform }}
           REVIEW_ID: ${{ inputs.review_id }}
           REPLY_TEXT: ${{ inputs.reply_text }}
+          # Single mode only; batch items carry per-item is_human inside REPLIES.
+          IS_HUMAN: ${{ inputs.is_human }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

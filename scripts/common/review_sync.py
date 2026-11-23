@@ -8,10 +8,6 @@ from common.state_manager import mark_posted, now_iso, save_state, upsert_review
 
 LOG = logging.getLogger(__name__)
 
-# A review must be at least this many stars to be eligible for auto-reply, on top
-# of Codex's auto_reply flag and the per-app opt-in (see collect_new_reviews).
-AUTO_REPLY_MIN_RATING = 3
-
 
 def reply_hash(text: str) -> str:
     """Return a stable hash for the normalized response text."""
@@ -73,7 +69,6 @@ def collect_new_reviews(
     suggestion_generator=None,
     reply_sender=None,
     auto_reply_enabled: bool = False,
-    ping_sink=None,
 ) -> list[dict]:
     """Select new reviews, record them in state, return dashboard entries.
 
@@ -86,18 +81,16 @@ def collect_new_reviews(
     posted_ids), last_review_id advances, and ``normalizer(review,
     suggested_reply)`` dicts are returned for the app's pending-list data file.
     ``suggestion_generator`` is called ONCE with the list of new reviews and
-    returns ``{review_id: {"reply", "auto_reply", "ping"}}``; it must never raise
-    (AI is optional).
+    returns ``{review_id: reply_text}`` (only reviews that cleared the RAG gate
+    carry a reply); it must never raise (AI is optional).
 
-    Auto-reply: when ``auto_reply_enabled`` (the app opted in) and a
-    ``reply_sender(review_id, text)`` callable is supplied, the reply is sent now
-    and recorded like a manual reply (``last_sent_reply_hash`` + ``replied_at`` +
-    the reply flag) plus ``auto_replied=True`` — for either a Codex ``auto_reply``
-    (simple positive) whose rating is >= ``AUTO_REPLY_MIN_RATING``, or a Codex
-    ``support_redirect`` (booking/payment issue whose reply just points to the
-    provider) at any rating. A send failure is logged and the review stays pending
-    for a manual reply. Reviews Codex flagged ``ping`` are appended to
-    ``ping_sink`` (when provided) for the developer Slack notice.
+    Auto-reply: when ``auto_reply_enabled`` (the app opted in via apps.json
+    ``autoreply``) and a ``reply_sender(review_id, text)`` callable is supplied,
+    any generated reply is sent now and recorded like a manual reply
+    (``last_sent_reply_hash`` + ``replied_at`` + the reply flag) plus
+    ``auto_replied=True``. The RAG gate already guarantees a reply exists only
+    when there is strong human precedent, so there is no extra rating floor. A
+    send failure is logged and the review stays pending for a manual reply.
     """
     if initial_sync:
         # Baseline only: mark every existing review as seen (posted_ids), record
@@ -124,29 +117,14 @@ def collect_new_reviews(
         LOG.info("Collected %d new %s review(s) for the dashboard", len(new_reviews), provider)
         for review in reversed(new_reviews):
             review_id = review_id_getter(review)
-            suggestion = suggestions.get(review_id)
-            if not isinstance(suggestion, dict):
-                suggestion = {}
-            suggested_reply = suggestion.get("reply")
+            suggested_reply = suggestions.get(review_id)
             entry = normalizer(review, suggested_reply)
 
-            # Auto-reply when the app opted in and either: a simple positive
-            # review clears the rating floor, or it's a booking/payment/support
-            # review whose reply just redirects to the provider (safe generic
-            # content, so no rating floor). A send failure leaves it pending so
-            # the operator can still reply by hand.
-            positive_auto = (
-                suggestion.get("auto_reply")
-                and int(entry.get("rating") or 0) >= AUTO_REPLY_MIN_RATING
-            )
-            support_auto = bool(suggestion.get("support_redirect"))
+            # Auto-reply when the app opted in and the RAG gate produced a reply.
+            # The gate (>= K strong human-precedent examples) is the safety bar;
+            # a send failure leaves the review pending for a manual reply.
             auto_sent = False
-            if (
-                auto_reply_enabled
-                and suggested_reply
-                and reply_sender is not None
-                and (positive_auto or support_auto)
-            ):
+            if auto_reply_enabled and suggested_reply and reply_sender is not None:
                 try:
                     reply_sender(review_id, suggested_reply)
                     auto_sent = True
@@ -176,16 +154,6 @@ def collect_new_reviews(
                 entry["auto_replied"] = True
                 entry["replied"] = True
                 entry["reply_text"] = suggested_reply
-            if suggestion.get("ping") and ping_sink is not None:
-                ping_sink.append(
-                    {
-                        "review_id": review_id,
-                        "platform": entry.get("platform"),
-                        "rating": entry.get("rating"),
-                        "title": entry.get("title"),
-                        "body": entry.get("body"),
-                    }
-                )
             entries.append(entry)
         state["last_review_id"] = review_id_getter(reviews[0])
         save_state(provider, state)

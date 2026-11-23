@@ -84,6 +84,9 @@ export interface ReplyItem {
   platform: Platform
   review_id: string
   reply_text: string
+  // True when the operator wrote or edited this reply (vs. accepting an AI
+  // suggestion unchanged). Only human replies seed the RAG corpus.
+  is_human: boolean
 }
 
 /**
@@ -136,6 +139,7 @@ export function dispatchReply(input: {
   platform: Platform
   review_id: string
   reply_text: string
+  is_human: boolean
 }): Promise<void> {
   return dispatchWorkflow(
     {
@@ -143,6 +147,7 @@ export function dispatchReply(input: {
       platform: input.platform,
       review_id: input.review_id,
       reply_text: input.reply_text,
+      is_human: String(input.is_human),
     },
     `single ${input.platform}/${input.review_id}`,
   )

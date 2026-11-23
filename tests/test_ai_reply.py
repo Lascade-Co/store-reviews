@@ -9,7 +9,14 @@ from common.ai_reply import MAX_SUGGESTED_REPLY_LENGTH, generate_suggested_repli
 
 
 REVIEWS = [
-    {"id": "r1", "platform": "Google Play", "rating": 5, "title": "", "body": "buena"},
+    {
+        "id": "r1",
+        "platform": "Google Play",
+        "rating": 5,
+        "title": "",
+        "body": "buena",
+        "examples": [{"review": "great app", "reply": "Thanks so much!"}],
+    },
     {"id": "r2", "platform": "Apple App Store", "rating": 2, "title": "Bad", "body": "too costly"},
 ]
 
@@ -26,17 +33,12 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
                 self.assertEqual(generate_suggested_replies(REVIEWS), {})
                 run.assert_not_called()
 
-    def test_reads_codex_output_file(self):
+    def test_reads_codex_output_file_as_id_to_string(self):
         def fake_run(cmd, **kwargs):
-            # Codex writes the output file into its cwd (the scratch dir).
+            # The retrieved examples must be handed to Codex in the prompt.
+            self.assertIn('"examples"', kwargs["input"])
             with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
-                json.dump(
-                    {
-                        "r1": {"reply": "¡Gracias!", "auto_reply": True, "support_redirect": False, "ping": False},
-                        "r2": {"reply": "Contact the provider.", "auto_reply": False, "support_redirect": True, "ping": False},
-                    },
-                    fh,
-                )
+                json.dump({"r1": "¡Gracias!", "r2": "Contact the provider."}, fh)
 
             class R:  # minimal CompletedProcess stand-in
                 pass
@@ -47,45 +49,23 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
              patch("common.ai_reply.subprocess.run", side_effect=fake_run) as run:
             result = generate_suggested_replies(REVIEWS)
 
-        self.assertEqual(
-            result,
-            {
-                "r1": {"reply": "¡Gracias!", "auto_reply": True, "support_redirect": False, "ping": False},
-                "r2": {"reply": "Contact the provider.", "auto_reply": False, "support_redirect": True, "ping": False},
-            },
-        )
+        self.assertEqual(result, {"r1": "¡Gracias!", "r2": "Contact the provider."})
         # Correct codex invocation.
         cmd = run.call_args.args[0]
         self.assertEqual(cmd[:2], ["codex", "exec"])
         self.assertIn("--sandbox", cmd)
 
-    def test_bare_string_output_is_tolerated_as_reply_with_flags_false(self):
+    def test_dict_wrapped_reply_is_tolerated(self):
         def fake_run(cmd, **kwargs):
             with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
-                json.dump({"r1": "Thanks!"}, fh)  # old id->string shape
+                json.dump({"r1": {"reply": "Thanks!"}}, fh)  # model wrapped it in an object
             return None
 
         with patch.object(ai_reply, "_codex_available", return_value=True), \
              patch("common.ai_reply.subprocess.run", side_effect=fake_run):
             result = generate_suggested_replies(REVIEWS)
 
-        self.assertEqual(
-            result["r1"],
-            {"reply": "Thanks!", "auto_reply": False, "support_redirect": False, "ping": False},
-        )
-
-    def test_non_bool_flags_are_coerced(self):
-        def fake_run(cmd, **kwargs):
-            with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
-                json.dump({"r1": {"reply": "Hi", "auto_reply": 1, "ping": "yes"}}, fh)
-            return None
-
-        with patch.object(ai_reply, "_codex_available", return_value=True), \
-             patch("common.ai_reply.subprocess.run", side_effect=fake_run):
-            result = generate_suggested_replies(REVIEWS)
-
-        self.assertIs(result["r1"]["auto_reply"], True)
-        self.assertIs(result["r1"]["ping"], True)
+        self.assertEqual(result["r1"], "Thanks!")
 
     def test_codex_failure_returns_empty(self):
         with patch.object(ai_reply, "_codex_available", return_value=True), \
@@ -145,10 +125,10 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
             with open(os.path.join(kwargs["cwd"], "suggested_replies.json"), "w", encoding="utf-8") as fh:
                 json.dump(
                     {
-                        "r1": {"reply": "x" * 600, "auto_reply": False, "ping": False},
-                        "r2": {"reply": "   "},  # blank reply
-                        "r3": 5,  # non-dict, non-string
-                        "r4": {"auto_reply": True},  # missing reply
+                        "r1": "x" * 600,  # overlong
+                        "r2": "   ",  # blank
+                        "r3": 5,  # non-string, non-dict
+                        "r4": {"not_reply": "x"},  # dict without a reply
                     },
                     fh,
                 )
@@ -158,10 +138,10 @@ class GenerateSuggestedRepliesTests(unittest.TestCase):
              patch("common.ai_reply.subprocess.run", side_effect=fake_run):
             result = generate_suggested_replies(REVIEWS)
 
-        self.assertEqual(len(result["r1"]["reply"]), MAX_SUGGESTED_REPLY_LENGTH)
+        self.assertEqual(len(result["r1"]), MAX_SUGGESTED_REPLY_LENGTH)
         self.assertNotIn("r2", result)  # blank reply dropped
-        self.assertNotIn("r3", result)  # non-dict dropped
-        self.assertNotIn("r4", result)  # missing reply dropped
+        self.assertNotIn("r3", result)  # non-string dropped
+        self.assertNotIn("r4", result)  # dict without reply dropped
 
 
 if __name__ == "__main__":
