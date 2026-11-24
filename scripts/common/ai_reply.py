@@ -8,8 +8,12 @@ OpenAI API key or billing.
 Generation is an optional enhancement: every failure path returns an empty
 result so the sync run itself never breaks because the AI is unavailable. All
 of a run's new reviews are sent in ONE Codex invocation, which writes a JSON
-object mapping each review id to an object with its reply plus two
-classification flags (auto_reply, ping); the sync reads that file.
+object mapping each review id to its reply string; the sync reads that file.
+
+RAG: each review carries ``examples`` — past HUMAN replies to similar reviews,
+retrieved upstream (see common/rag.py) — which Codex uses as the voice to match.
+Whether a reply is auto-sent is decided later by the per-app ``autoreply`` flag,
+not here; this module only drafts.
 """
 
 import json
@@ -67,6 +71,8 @@ CODEX_TIMEOUT_SECONDS = 600
 
 PROMPT_TEMPLATE = """You write official public developer replies to app store reviews for a travel booking platform that lists flight,car rental and hotel offers from many third-party travel providers.
 
+Each review comes with "examples": past replies our human support team wrote to SIMILAR reviews. Treat them as the gold standard for our voice — match their tone, length, warmth, and phrasing closely. Adapt to the specific review; never copy an example verbatim.
+
 For EVERY review, write a reply following these rules:
 - Reply in the SAME language as the review text; if unclear, use English.
 - Be warm, natural, professional, and concise.
@@ -80,14 +86,9 @@ For EVERY review, write a reply following these rules:
 - For a review about a booking, payment, refund, cancellation, or a specific order/trip problem: the booking is fulfilled directly by the travel provider, so politely explain that this is handled by the provider and ask the reviewer to contact the provider's support using the email in their booking confirmation, or via the provider's website. Do not promise an outcome.
 - Keep the reply at most {limit} characters.
 
-For EACH review also classify:
-- "auto_reply": set true ONLY after carefully analysing the review and concluding it is a SIMPLE, clearly POSITIVE review that needs only a GENERIC thank-you reply — i.e. unambiguous praise or rating-only positivity, with NO complaint, bug report, question, feature request, mixed sentiment, or anything needing a specific or factual answer. If the review needs any tailored or factual response, set false. When in doubt, set false. LANGUAGE IS IRRELEVANT to this decision: a simple positive review in ANY language (e.g. Spanish, Hindi, Arabic, Portuguese) qualifies exactly like an English one — your reply is written in that same language. Never set false merely because the review is not in English.
-- "support_redirect": set true if the review is about a booking, payment, refund, cancellation, or a specific order/trip problem — i.e. the one your reply hands off to the travel provider's support (per the booking-issue rule above). Otherwise false.
-- "ping": set true if the review reports an app problem/bug or makes a feature suggestion the developer should see; otherwise false.
+Write ONLY a JSON object to a file named `{output}` mapping each review's "id" to its reply string, i.e. {{"<id>": "<reply string>"}}. Do not print the JSON or any other commentary.
 
-Write ONLY a JSON object to a file named `{output}` mapping each review's "id" to an object of the form {{"reply": "<reply string>", "auto_reply": <true|false>, "support_redirect": <true|false>, "ping": <true|false>}}. Do not print the JSON or any other commentary.
-
-Reviews:
+Reviews (each with "examples" = past human replies to similar reviews):
 {payload}
 """
 
@@ -98,14 +99,14 @@ def _codex_available() -> bool:
     return os.path.exists(os.path.expanduser("~/.codex/auth.json"))
 
 
-def generate_suggested_replies(reviews: list[dict]) -> dict[str, dict]:
-    """Return {review_id: {reply, auto_reply, support_redirect, ping}} (empty on failure).
+def generate_suggested_replies(reviews: list[dict]) -> dict[str, str]:
+    """Return {review_id: reply_text} (empty on any failure).
 
-    ``reviews`` items are ``{"id", "platform", "rating", "title", "body"}``. Each
-    returned value is ``{"reply": str, "auto_reply": bool, "support_redirect":
-    bool, "ping": bool}``. A review Codex produced no usable reply for is omitted.
-    A degenerate output whose value is a bare reply string (older shape / model
-    slip) is tolerated as a reply with all flags false.
+    ``reviews`` items are ``{"id", "platform", "rating", "title", "body",
+    "examples"}`` where ``examples`` is a list of ``{"review", "reply"}`` past
+    human replies to similar reviews. A review Codex produced no usable reply for
+    is omitted. A value that arrives as ``{"reply": str}`` (model slip) is
+    tolerated as the bare reply string.
     """
     if not reviews:
         return {}
@@ -120,6 +121,7 @@ def generate_suggested_replies(reviews: list[dict]) -> dict[str, dict]:
             "rating": review.get("rating"),
             "title": review.get("title") or "",
             "body": review.get("body") or "",
+            "examples": review.get("examples") or [],
         }
         for review in reviews
     ]
@@ -179,20 +181,12 @@ def generate_suggested_replies(reviews: list[dict]) -> dict[str, dict]:
         LOG.warning("Codex suggested-reply output was not a JSON object; ignoring")
         return {}
 
-    suggestions: dict[str, dict] = {}
+    suggestions: dict[str, str] = {}
     for review_id, value in data.items():
-        if isinstance(value, str):
-            value = {"reply": value}  # tolerate the old id->string shape
-        if not isinstance(value, dict):
+        if isinstance(value, dict):
+            value = value.get("reply")  # tolerate {"reply": "..."} wrapping
+        if not isinstance(value, str) or not value.strip():
             continue
-        reply = value.get("reply")
-        if not isinstance(reply, str) or not reply.strip():
-            continue
-        suggestions[str(review_id)] = {
-            "reply": reply.strip()[:MAX_SUGGESTED_REPLY_LENGTH].rstrip(),
-            "auto_reply": bool(value.get("auto_reply")),
-            "support_redirect": bool(value.get("support_redirect")),
-            "ping": bool(value.get("ping")),
-        }
+        suggestions[str(review_id)] = value.strip()[:MAX_SUGGESTED_REPLY_LENGTH].rstrip()
     LOG.info("Codex generated %d suggested repl(ies)", len(suggestions))
     return suggestions

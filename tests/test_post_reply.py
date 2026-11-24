@@ -11,9 +11,12 @@ class ResolveItemsTests(unittest.TestCase):
         return patch.dict(os.environ, kw, clear=True)
 
     def test_single_mode(self):
-        with self.env(PLATFORM="appstore", REVIEW_ID="r1", REPLY_TEXT="hi"):
+        with self.env(PLATFORM="appstore", REVIEW_ID="r1", REPLY_TEXT="hi", IS_HUMAN="true"):
             items = post_reply._resolve_items()
-        self.assertEqual(items, [{"platform": "appstore", "review_id": "r1", "reply_text": "hi"}])
+        self.assertEqual(
+            items,
+            [{"platform": "appstore", "review_id": "r1", "reply_text": "hi", "is_human": "true"}],
+        )
 
     def test_batch_mode_from_replies_json(self):
         blob = '[{"platform":"playstore","review_id":"r2","reply_text":"yo"}]'
@@ -75,6 +78,58 @@ class SendOneTests(unittest.TestCase):
         with patch("post_reply.save_state"):
             result = post_reply._send_one(states, "windows", "r1", "hi", lambda *a: None)
         self.assertEqual(result, "failed")
+
+
+class CaptureCorpusTests(unittest.TestCase):
+    ENTRY_INDEX = {
+        ("playstore", "r1"): {
+            "platform": "playstore",
+            "review_id": "r1",
+            "body": "Great app, loved the deals",
+            "rating": 5,
+            "territory_or_language": "en",
+        }
+    }
+
+    def _item(self, **over):
+        item = {"platform": "playstore", "review_id": "r1", "reply_text": "Thanks a lot!", "is_human": True}
+        item.update(over)
+        return item
+
+    def test_human_send_writes_pending_with_review_words(self):
+        with patch.dict(os.environ, {"APP_TYPE": "flight"}, clear=False), \
+             patch("post_reply.corpus.write_pending") as write:
+            post_reply._capture_corpus(self._item(), self.ENTRY_INDEX, "D1AS")
+        write.assert_called_once()
+        key, obj = write.call_args.args
+        self.assertEqual(key, "D1AS__playstore__r1")
+        self.assertEqual(obj["key"], "D1AS__playstore__r1")
+        self.assertEqual(obj["review"], "Great app, loved the deals")  # from the dashboard entry
+        self.assertEqual(obj["reply"], "Thanks a lot!")
+        self.assertEqual(obj["type"], "flight")
+        self.assertEqual(obj["rating"], 5)
+        self.assertTrue(obj["is_human"])
+
+    def test_non_human_send_is_not_captured(self):
+        with patch("post_reply.corpus.write_pending") as write:
+            post_reply._capture_corpus(self._item(is_human=False), self.ENTRY_INDEX, "D1AS")
+        write.assert_not_called()
+
+    def test_string_is_human_false_is_not_captured(self):
+        # The single-mode env value arrives as a string.
+        with patch("post_reply.corpus.write_pending") as write:
+            post_reply._capture_corpus(self._item(is_human="false"), self.ENTRY_INDEX, "D1AS")
+        write.assert_not_called()
+
+    def test_missing_dashboard_entry_is_skipped(self):
+        with patch("post_reply.corpus.write_pending") as write:
+            post_reply._capture_corpus(self._item(review_id="ghost"), self.ENTRY_INDEX, "D1AS")
+        write.assert_not_called()
+
+    def test_write_failure_is_swallowed(self):
+        with patch("post_reply.corpus.write_pending", side_effect=RuntimeError("r2 down")) as write:
+            post_reply._capture_corpus(self._item(), self.ENTRY_INDEX, "D1AS")  # must not raise
+        self.assertEqual(write.call_count, 3)  # retried 3x then gave up
 
 
 if __name__ == "__main__":

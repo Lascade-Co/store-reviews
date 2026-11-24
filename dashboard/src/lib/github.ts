@@ -84,6 +84,9 @@ export interface ReplyItem {
   platform: Platform
   review_id: string
   reply_text: string
+  // True when the operator wrote or edited this reply (vs. accepting an AI
+  // suggestion unchanged). Only human replies seed the RAG corpus.
+  is_human: boolean
 }
 
 /**
@@ -95,7 +98,7 @@ async function dispatchWorkflow(inputs: Record<string, string>, label: string): 
   const token = getToken()
   if (!token) throw new AuthError("No access token saved")
 
-  console.info(`[reply] dispatching ${WORKFLOW}@${REF} on ${OWNER}/${REPO} (${label})`)
+  console.info(`[dispatch] dispatching ${WORKFLOW}@${REF} on ${OWNER}/${REPO} (${label})`)
   const res = await fetch(
     `https://api.github.com/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW}/dispatches`,
     {
@@ -110,22 +113,22 @@ async function dispatchWorkflow(inputs: Record<string, string>, label: string): 
   )
 
   if (res.status === 204) {
-    console.info("[reply] dispatch accepted (204) — watch the run at " +
+    console.info("[dispatch] dispatch accepted (204) — watch the run at " +
       `https://github.com/${OWNER}/${REPO}/actions/workflows/${WORKFLOW}`)
     return
   }
   const detail = await res.text().catch(() => "")
-  console.error(`[reply] dispatch FAILED: HTTP ${res.status}`, detail.slice(0, 300))
+  console.error(`[dispatch] dispatch FAILED: HTTP ${res.status}`, detail.slice(0, 300))
   if (res.status === 401 || res.status === 403) {
-    console.error("[reply] token rejected — it may be expired, mistyped, or missing the 'Actions: Read and write' permission on this repository. It has been cleared; enter a fresh one.")
+    console.error("[dispatch] token rejected — it may be expired, mistyped, or missing the 'Actions: Read and write' permission on this repository. It has been cleared; enter a fresh one.")
     clearToken()
     throw new AuthError("Access token was rejected — please enter a valid token")
   }
   if (res.status === 404) {
-    console.error(`[reply] 404 — GitHub can't see ${WORKFLOW} on branch '${REF}' of ${OWNER}/${REPO}. Causes: reply workflow not merged to the default branch yet, OR the token's repository access doesn't include this repo (fine-grained tokens get 404, not 403, for repos they can't see).`)
+    console.error(`[dispatch] 404 — GitHub can't see ${WORKFLOW} on branch '${REF}' of ${OWNER}/${REPO}. Causes: reply workflow not merged to the default branch yet, OR the token's repository access doesn't include this repo (fine-grained tokens get 404, not 403, for repos they can't see).`)
   }
   if (res.status === 422) {
-    console.error("[reply] 422 — the workflow rejected the inputs (name mismatch or missing input). Compare the dispatched inputs with reply-review.yml's inputs.")
+    console.error("[dispatch] 422 — the workflow rejected the inputs (name mismatch or missing input). Compare the dispatched inputs with reply-review.yml's inputs.")
   }
   throw new Error(`Dispatch failed (HTTP ${res.status}) ${detail.slice(0, 200)}`)
 }
@@ -136,13 +139,16 @@ export function dispatchReply(input: {
   platform: Platform
   review_id: string
   reply_text: string
+  is_human: boolean
 }): Promise<void> {
   return dispatchWorkflow(
     {
+      action: "reply",
       app_code: input.app_code,
       platform: input.platform,
       review_id: input.review_id,
       reply_text: input.reply_text,
+      is_human: String(input.is_human),
     },
     `single ${input.platform}/${input.review_id}`,
   )
@@ -154,7 +160,32 @@ export function dispatchReply(input: {
  */
 export function dispatchReplyAll(app_code: string, replies: ReplyItem[]): Promise<void> {
   return dispatchWorkflow(
-    { app_code, replies: JSON.stringify(replies) },
+    { action: "reply", app_code, replies: JSON.stringify(replies) },
     `batch ${replies.length} repl${replies.length === 1 ? "y" : "ies"}`,
   )
+}
+
+// One review->reply example to seed into the RAG corpus. app/type are stamped
+// server-side from the current app (the dashboard is scoped to one app), so the
+// UI only supplies the text and rating.
+export interface FeedRecord {
+  review: string
+  reply: string
+  rating: number
+}
+
+/**
+ * Feed example pairs into the RAG corpus (action=feed). The workflow embeds each
+ * review and upserts it into the LanceDB table immediately.
+ */
+export function dispatchFeed(app_code: string, records: FeedRecord[]): Promise<void> {
+  return dispatchWorkflow(
+    { action: "feed", app_code, payload: JSON.stringify(records) },
+    `feed ${records.length} pair${records.length === 1 ? "" : "s"}`,
+  )
+}
+
+/** Drop the whole RAG corpus table (action=clear). */
+export function dispatchClear(app_code: string): Promise<void> {
+  return dispatchWorkflow({ action: "clear", app_code }, "clear corpus")
 }

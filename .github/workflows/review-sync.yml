@@ -98,6 +98,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+      - name: Cache embedding model
+        # The RAG retrieval step loads the multilingual embedding model (fastembed
+        # ONNX). It is large relative to the job timeout, so cache its weights
+        # across runs. Harmless (empty) during the seeding period before any
+        # corpus exists — retrieval short-circuits and never loads the model.
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.fastembed_cache
+          key: fastembed-bge-m3-v1
       - name: Restore Codex auth.json
         # AI-suggested replies use the org Codex CLI authenticated by the shared
         # ChatGPT plan (no per-token OpenAI key). Same pattern as
@@ -147,10 +156,14 @@ jobs:
           APP_CODE: ${{ matrix.app.appcode }}
           APP_NAME: ${{ matrix.app.appname }}
           APP_INFISICAL_SLUG: ${{ matrix.app.infisical_slug }}
+          # App category (flight/car/hotel): the RAG retrieval filter, and stored
+          # with each corpus row. Empty is tolerated (retrieval just widens).
+          APP_TYPE: ${{ matrix.app.type }}
+          # Where fastembed caches model weights (see the Cache step above).
+          FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.fastembed_cache
           # Per-app opt-in (apps.json "autoreply"). When true, the sync auto-sends
-          # replies Codex flagged as simple positives (rating >= 3). Empty/false =
-          # suggest-only. SLACK_DEV_ID (developer ping target) needs no entry here:
-          # the Infisical step already exports every /reviews key as env.
+          # any reply the RAG gate produced (>= K similar human replies).
+          # Empty/false = draft-only (shown on the dashboard for a manual send).
           APP_AUTO_REPLY: ${{ matrix.app.autoreply }}
           # One internal bot serves every app by default, so its token lives
           # once on this repo. An app can still override it by putting its own
@@ -330,5 +343,56 @@ jobs:
 
           echo "Unable to push state after 4 attempts."
           exit 1
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
+
+  consolidate-corpus:
+    # The ONLY writer of the RAG corpus (the LanceDB table on R2). One job for the
+    # whole run, AFTER every per-app matrix job: the matrix jobs only READ the
+    # corpus (retrieval), while replies drop append-only pending files on R2.
+    # This job embeds those pending files and upserts them into the table, so a
+    # single writer touches the shared table and there is no concurrent-write
+    # race (see automation.md). The concurrency group serializes two overlapping
+    # sync runs' consolidations. It writes nothing to git — only R2.
+    name: Consolidate RAG corpus
+    needs: [set-matrix, sync]
+    if: ${{ always() && needs.set-matrix.result == 'success' }}
+    runs-on: ubuntu-latest
+    # Reads R2 secrets, so (per the sealed-workflow policy) it must run in an
+    # allowed environment.
+    environment: production
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    concurrency:
+      group: corpus-consolidate
+      cancel-in-progress: false
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Setup Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.fastembed_cache
+          key: fastembed-bge-m3-v1
+      - name: Consolidate pending human replies into the corpus
+        env:
+          FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.fastembed_cache
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: python scripts/consolidate_corpus.py
       - if: always()
         uses: Lascade-Co/actions/actions/seal-upload@seal-v1

@@ -12,10 +12,15 @@ def _id(item: dict) -> str:
     return item["id"]
 
 
-class AutoReplyAndPingTests(unittest.TestCase):
-    """The incremental loop auto-sends gated positives and collects pings."""
+class AutoReplyTests(unittest.TestCase):
+    """Auto-send fires iff the app opted in AND the RAG gate produced a reply.
 
-    def _collect(self, *, suggestion, rating, auto_enabled, reply_sender=None, ping_sink=None):
+    The gate (>= K strong human-precedent examples) lives upstream in the
+    suggestion_generator, so here a present suggestion means the gate passed and
+    an absent one (None) means it closed — there is no rating floor.
+    """
+
+    def _collect(self, *, suggestion, rating, auto_enabled, reply_sender=None):
         state = {"last_review_id": "r0", "reviews": {"r0": {}}, "posted_ids": ["r0"]}
         reviews = [review("r1"), review("r0")]  # r1 is new, r0 is the boundary
 
@@ -32,22 +37,22 @@ class AutoReplyAndPingTests(unittest.TestCase):
                 "auto_replied": False,
             }
 
+        # suggestion is the reply string (gate passed) or None (gate closed).
+        suggestions = {"r1": suggestion} if suggestion is not None else {}
         with patch("common.review_sync.save_state"):
             entries = collect_new_reviews(
                 "playstore", reviews, state, initial_sync=False,
                 review_id_getter=_id, normalizer=normalizer,
                 reply_sent_key="google_reply_sent", stop_at_boundary=False,
-                suggestion_generator=lambda new: {"r1": suggestion},
+                suggestion_generator=lambda new: suggestions,
                 reply_sender=reply_sender, auto_reply_enabled=auto_enabled,
-                ping_sink=ping_sink,
             )
         return entries, state
 
-    def test_auto_sends_and_records_when_gated_conditions_met(self):
+    def test_auto_sends_and_records_when_opted_in_with_a_suggestion(self):
         sender = Mock()
         entries, state = self._collect(
-            suggestion={"reply": "Thanks!", "auto_reply": True, "ping": False},
-            rating=5, auto_enabled=True, reply_sender=sender,
+            suggestion="Thanks!", rating=5, auto_enabled=True, reply_sender=sender,
         )
         sender.assert_called_once_with("r1", "Thanks!")
         self.assertTrue(entries[0]["auto_replied"])
@@ -59,59 +64,39 @@ class AutoReplyAndPingTests(unittest.TestCase):
         self.assertIn("last_sent_reply_hash", recorded)
         self.assertIn("replied_at", recorded)
 
-    def test_not_sent_below_rating_floor(self):
+    def test_low_rating_still_auto_sends_when_gate_produced_a_reply(self):
+        # No rating floor anymore: a 1-star review with a gated reply auto-sends.
         sender = Mock()
-        entries, state = self._collect(
-            suggestion={"reply": "Thanks!", "auto_reply": True, "ping": False},
-            rating=2, auto_enabled=True, reply_sender=sender,
-        )
-        sender.assert_not_called()
-        self.assertFalse(entries[0]["auto_replied"])
-        self.assertFalse(state["reviews"]["r1"].get("auto_replied"))
-
-    def test_support_redirect_auto_sends_regardless_of_rating(self):
-        # A booking/payment complaint is low-rated but its redirect reply is safe
-        # generic content, so it auto-sends even below the positive rating floor.
-        sender = Mock()
-        entries, state = self._collect(
-            suggestion={"reply": "Please contact the provider's support.",
-                        "auto_reply": False, "support_redirect": True, "ping": False},
+        entries, _ = self._collect(
+            suggestion="Please contact the provider's support.",
             rating=1, auto_enabled=True, reply_sender=sender,
         )
         sender.assert_called_once_with("r1", "Please contact the provider's support.")
         self.assertTrue(entries[0]["auto_replied"])
-        self.assertTrue(state["reviews"]["r1"]["auto_replied"])
-
-    def test_support_redirect_still_respects_opt_in(self):
-        sender = Mock()
-        self._collect(
-            suggestion={"reply": "Please contact the provider's support.",
-                        "auto_reply": False, "support_redirect": True, "ping": False},
-            rating=1, auto_enabled=False, reply_sender=sender,
-        )
-        sender.assert_not_called()
 
     def test_not_sent_when_app_not_opted_in(self):
         sender = Mock()
-        self._collect(
-            suggestion={"reply": "Thanks!", "auto_reply": True, "ping": False},
-            rating=5, auto_enabled=False, reply_sender=sender,
+        entries, state = self._collect(
+            suggestion="Thanks!", rating=5, auto_enabled=False, reply_sender=sender,
         )
         sender.assert_not_called()
+        self.assertFalse(entries[0]["auto_replied"])
+        # The suggestion is still shown on the dashboard for a manual send.
+        self.assertEqual(entries[0]["suggested_reply"], "Thanks!")
 
-    def test_not_sent_when_codex_flag_false(self):
+    def test_not_sent_when_gate_closed_no_suggestion(self):
         sender = Mock()
-        self._collect(
-            suggestion={"reply": "Thanks!", "auto_reply": False, "ping": False},
-            rating=5, auto_enabled=True, reply_sender=sender,
+        entries, _ = self._collect(
+            suggestion=None, rating=5, auto_enabled=True, reply_sender=sender,
         )
         sender.assert_not_called()
+        self.assertFalse(entries[0]["auto_replied"])
+        self.assertIsNone(entries[0]["suggested_reply"])
 
     def test_send_failure_leaves_review_pending(self):
         sender = Mock(side_effect=RuntimeError("store rejected"))
         entries, state = self._collect(
-            suggestion={"reply": "Thanks!", "auto_reply": True, "ping": False},
-            rating=5, auto_enabled=True, reply_sender=sender,
+            suggestion="Thanks!", rating=5, auto_enabled=True, reply_sender=sender,
         )
         sender.assert_called_once()
         self.assertFalse(entries[0]["auto_replied"])
@@ -119,16 +104,6 @@ class AutoReplyAndPingTests(unittest.TestCase):
         self.assertFalse(recorded.get("auto_replied"))
         self.assertFalse(recorded.get("google_reply_sent"))
         self.assertNotIn("last_sent_reply_hash", recorded)
-
-    def test_ping_flagged_review_is_collected(self):
-        sink = []
-        self._collect(
-            suggestion={"reply": "We'll look into it", "auto_reply": False, "ping": True},
-            rating=3, auto_enabled=False, ping_sink=sink,
-        )
-        self.assertEqual(len(sink), 1)
-        self.assertEqual(sink[0]["review_id"], "r1")
-        self.assertEqual(sink[0]["platform"], "playstore")
 
 
 class BoundarySelectionTests(unittest.TestCase):
