@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Send, Sparkles, PencilLine, Check, RotateCcw, X } from "lucide-react"
+import { Send, Sparkles, PencilLine, Check, RotateCcw, X, Database, Trash2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -14,7 +14,18 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Toaster, toast } from "@/components/ui/toast"
 import { fetchReviews } from "@/lib/data"
-import { AuthError, dispatchReply, dispatchReplyAll, getToken, isValidToken, saveToken, verifyToken } from "@/lib/github"
+import {
+  AuthError,
+  dispatchClear,
+  dispatchFeed,
+  dispatchReply,
+  dispatchReplyAll,
+  getToken,
+  isValidToken,
+  saveToken,
+  verifyToken,
+  type FeedRecord,
+} from "@/lib/github"
 import type { Review, ReviewPayload } from "@/lib/types"
 
 // Store reply length caps. Google Play rejects replies over ~350 chars (hard
@@ -137,6 +148,19 @@ export default function App() {
   const [sendingKey, setSendingKey] = useState<string | null>(null)
   const [sendingAll, setSendingAll] = useState(false)
   const [dispatched, setDispatched] = useState<Set<string>>(new Set())
+
+  // Corpus admin (feed / clear) — seed example pairs into the RAG corpus or
+  // reset it. These dispatch the same workflow with action=feed / action=clear.
+  const [feedDialogOpen, setFeedDialogOpen] = useState(false)
+  const [feedMode, setFeedMode] = useState<"single" | "bulk">("single")
+  const [feedReview, setFeedReview] = useState("")
+  const [feedReply, setFeedReply] = useState("")
+  const [feedRating, setFeedRating] = useState(5)
+  const [feedBulk, setFeedBulk] = useState("")
+  const [feedError, setFeedError] = useState<string | null>(null)
+  const [feeding, setFeeding] = useState(false)
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
   const [tokenDialogOpen, setTokenDialogOpen] = useState(false)
   const [tokenDraft, setTokenDraft] = useState("")
@@ -288,6 +312,105 @@ export default function App() {
     }
   }
 
+  // Build the feed records from the dialog, validating either the single fields
+  // or the bulk JSON. Returns null (and sets feedError) when invalid.
+  function buildFeedRecords(): FeedRecord[] | null {
+    if (feedMode === "single") {
+      const review = feedReview.trim()
+      const reply = feedReply.trim()
+      if (!review || !reply) {
+        setFeedError("Both the review and the reply are required.")
+        return null
+      }
+      return [{ review, reply, rating: feedRating }]
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(feedBulk)
+    } catch {
+      setFeedError("Bulk input is not valid JSON.")
+      return null
+    }
+    const list = Array.isArray(parsed) ? parsed : [parsed]
+    const records: FeedRecord[] = []
+    for (const item of list) {
+      const review = typeof item?.review === "string" ? item.review.trim() : ""
+      const reply = typeof item?.reply === "string" ? item.reply.trim() : ""
+      if (!review || !reply) {
+        setFeedError("Each item needs a non-empty \"review\" and \"reply\".")
+        return null
+      }
+      const rating = Number.isFinite(item?.rating) ? Number(item.rating) : 5
+      records.push({ review, reply, rating })
+    }
+    if (records.length === 0) {
+      setFeedError("No records to feed.")
+      return null
+    }
+    return records
+  }
+
+  async function submitFeed() {
+    setFeedError(null)
+    const records = buildFeedRecords()
+    if (!records) return
+    if (!getToken()) {
+      setFeedDialogOpen(false)
+      setTokenNotice("Set up an access token once to feed examples from this dashboard.")
+      return
+    }
+    setFeeding(true)
+    try {
+      await dispatchFeed(appCode, records)
+      toast.add({
+        title: `Feeding ${records.length} example${records.length === 1 ? "" : "s"}`,
+        description: "Embedding into the corpus (~1 minute).",
+      })
+      setFeedDialogOpen(false)
+      setFeedReview("")
+      setFeedReply("")
+      setFeedBulk("")
+    } catch (err) {
+      if (err instanceof AuthError) {
+        setFeedDialogOpen(false)
+        setTokenNotice("Access token was rejected — please enter a valid token to feed examples.")
+      } else {
+        setFeedError(err instanceof Error ? err.message : String(err))
+      }
+    } finally {
+      setFeeding(false)
+    }
+  }
+
+  async function submitClear() {
+    if (!getToken()) {
+      setClearDialogOpen(false)
+      setTokenNotice("Set up an access token once to manage the corpus from this dashboard.")
+      return
+    }
+    setClearing(true)
+    try {
+      await dispatchClear(appCode)
+      toast.add({
+        title: "Clearing the corpus",
+        description: "Dropping the training table (~1 minute).",
+      })
+      setClearDialogOpen(false)
+    } catch (err) {
+      if (err instanceof AuthError) {
+        setClearDialogOpen(false)
+        setTokenNotice("Access token was rejected — please enter a valid token to clear the corpus.")
+      } else {
+        toast.add({
+          title: "Clear failed",
+          description: err instanceof Error ? err.message : String(err),
+        })
+      }
+    } finally {
+      setClearing(false)
+    }
+  }
+
   if (!appCode) {
     return (
       <main className="mx-auto flex min-h-svh max-w-xl flex-col items-center justify-center gap-3 p-8 text-center">
@@ -327,17 +450,45 @@ export default function App() {
 
         {/* App card */}
         <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-xs font-medium text-slate-500">App</p>
-          <div className="mt-1 flex flex-wrap items-center gap-3">
-            <h2 className="text-xl font-bold tracking-tight text-slate-900">
-              {payload?.app_details?.appname ?? appCode.replaceAll("_", " ")}
-            </h2>
-            <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs font-semibold text-slate-600">
-              {payload?.app_details?.appcode ?? appCode}
-            </span>
-            <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
-              Active
-            </Badge>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium text-slate-500">App</p>
+              <div className="mt-1 flex flex-wrap items-center gap-3">
+                <h2 className="text-xl font-bold tracking-tight text-slate-900">
+                  {payload?.app_details?.appname ?? appCode.replaceAll("_", " ")}
+                </h2>
+                <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs font-semibold text-slate-600">
+                  {payload?.app_details?.appcode ?? appCode}
+                </span>
+                <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
+                  Active
+                </Badge>
+              </div>
+            </div>
+            {/* Corpus (RAG training data) controls */}
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="inline-flex items-center gap-1.5 border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                onClick={() => {
+                  setFeedError(null)
+                  setFeedDialogOpen(true)
+                }}
+                title="Add review→reply examples to the RAG corpus"
+              >
+                <Database className="size-3.5" /> Feed examples
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="inline-flex items-center gap-1.5 border-red-200 text-xs font-semibold text-red-600 hover:bg-red-50"
+                onClick={() => setClearDialogOpen(true)}
+                title="Drop the whole RAG corpus table"
+              >
+                <Trash2 className="size-3.5" /> Clear corpus
+              </Button>
+            </div>
           </div>
         </section>
 
@@ -554,6 +705,131 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Feed examples dialog */}
+      <Dialog open={feedDialogOpen} onOpenChange={setFeedDialogOpen}>
+        <DialogContent className="sm:max-w-lg border-slate-200 bg-white text-slate-900 shadow-xl">
+          <DialogHeader>
+            <DialogTitle>Feed examples into the corpus</DialogTitle>
+            <DialogDescription>
+              Add past review→reply pairs for the AI to learn our voice from. Each
+              is tagged with this app ({payload?.app_details?.appcode ?? appCode})
+              and its type automatically.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex gap-2">
+            <Button
+              variant={feedMode === "single" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setFeedMode("single")}
+            >
+              Single
+            </Button>
+            <Button
+              variant={feedMode === "bulk" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setFeedMode("bulk")}
+            >
+              Bulk JSON
+            </Button>
+          </div>
+
+          {feedMode === "single" ? (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-600">Review</label>
+                <Textarea
+                  value={feedReview}
+                  onChange={(event) => setFeedReview(event.target.value)}
+                  rows={3}
+                  placeholder="The reviewer's words…"
+                  className="bg-white text-sm"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-600">Reply</label>
+                <Textarea
+                  value={feedReply}
+                  onChange={(event) => setFeedReply(event.target.value)}
+                  rows={3}
+                  placeholder="The human reply to learn from…"
+                  className="bg-white text-sm"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-semibold text-slate-600">Rating</label>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setFeedRating(n)}
+                    className={`size-7 rounded text-xs font-semibold transition-colors ${
+                      feedRating === n ? "bg-amber-400 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-600">
+                JSON array of {"{ review, reply, rating }"}
+              </label>
+              <Textarea
+                value={feedBulk}
+                onChange={(event) => setFeedBulk(event.target.value)}
+                rows={8}
+                placeholder={'[\n  {"review": "...", "reply": "...", "rating": 5}\n]'}
+                className="bg-white font-mono text-xs"
+              />
+            </div>
+          )}
+
+          {feedError && <p className="text-xs font-medium text-red-500">{feedError}</p>}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFeedDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-indigo-600 text-white hover:bg-indigo-700"
+              disabled={feeding}
+              onClick={() => void submitFeed()}
+            >
+              {feeding ? "Feeding…" : "Feed"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Clear corpus confirmation */}
+      <Dialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+        <DialogContent className="sm:max-w-md border-slate-200 bg-white text-slate-900 shadow-xl">
+          <DialogHeader>
+            <DialogTitle>Clear the corpus?</DialogTitle>
+            <DialogDescription>
+              This drops the <strong>entire</strong> RAG corpus table — every
+              stored example, for all apps. Suggestions stop until it is fed
+              again. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 text-white hover:bg-red-700"
+              disabled={clearing}
+              onClick={() => void submitClear()}
+            >
+              {clearing ? "Clearing…" : "Clear corpus"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* First-use token dialog */}
       <Dialog open={tokenDialogOpen} onOpenChange={setTokenDialogOpen}>

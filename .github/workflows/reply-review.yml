@@ -1,22 +1,36 @@
 name: Reply to Review
-run-name: "reply · ${{ inputs.app_code }} · ${{ inputs.review_id || 'ALL' }}"
+run-name: "${{ inputs.action || 'reply' }} · ${{ inputs.app_code }} · ${{ inputs.review_id || 'ALL' }}"
 
 # Workflow 2 of the web dashboard: dispatched from the browser (fine-grained
-# PAT with Actions read/write on this repo) when a user clicks Reply / Send All.
-# Two modes:
-#   single (reply_all=false): platform + review_id + reply_text — one reply.
-#   batch  (reply_all=true):  replies = JSON list of {platform, review_id,
-#                             reply_text} — every reply is sent in ONE run.
-# Either way it resolves the app's infisical_slug/appname from apps.json, sends
-# the reply(ies) to the store, updates state, and rebuilds the app's R2 file so
-# the replied reviews stop showing on the dashboard.
+# PAT with Actions read/write on this repo). One entry point, three actions
+# routed by the `action` input to a dedicated job (least-privilege: only `reply`
+# gets store credentials; `feed`/`clear` are R2-only):
+#   reply  — send a dashboard-approved reply (Reply / Send All). Single mode:
+#            platform + review_id + reply_text; batch mode: replies = JSON list.
+#            Resolves the app from apps.json, sends to the store, updates state,
+#            and rebuilds the app's R2 file so replied reviews drop off.
+#   feed   — embed review->reply example pairs (payload = JSON) and upsert them
+#            into the RAG corpus immediately (seed/test data).
+#   clear  — drop the whole RAG corpus table (reset).
+# feed/clear share the `corpus-consolidate` concurrency group so they never write
+# the LanceDB table while the sync's consolidation job is writing it.
 
 on:
   workflow_dispatch:
     inputs:
+      action:
+        description: "What to do: reply | feed | clear"
+        required: false
+        type: choice
+        options: [reply, feed, clear]
+        default: reply
       app_code:
         description: "The app's appcode (from apps.json)"
         required: true
+        type: string
+      payload:
+        description: "feed mode: JSON array (or object) of {review, reply, rating}"
+        required: false
         type: string
       reply_all:
         description: "Send every reply in `replies` (batch) instead of a single one"
@@ -77,6 +91,7 @@ defaults:
 jobs:
   reply:
     name: Send Reply and Update State
+    if: ${{ inputs.action == 'reply' }}
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 10
@@ -200,5 +215,103 @@ jobs:
 
           echo "Unable to push state after 4 attempts."
           exit 1
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
+
+  feed:
+    name: Feed corpus examples
+    if: ${{ inputs.action == 'feed' }}
+    runs-on: ubuntu-latest
+    # Reads R2 secrets, so (per the sealed-workflow policy) it runs in an allowed
+    # environment. No store credentials — feed only writes the corpus.
+    environment: production
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    # Share the consolidation writer's group: never write the LanceDB table while
+    # the sync's consolidate-corpus job is writing it.
+    concurrency:
+      group: corpus-consolidate
+      cancel-in-progress: false
+    env:
+      APP_CODE: ${{ inputs.app_code }}
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Resolve app from apps.json
+        # The dashboard knows only the appcode; look up the app category (type)
+        # so fed rows are tagged for type-scoped retrieval.
+        id: app
+        run: |
+          set -euo pipefail
+          obj="$(jq -c --arg c "${APP_CODE}" '.apps[] | select(.appcode == $c)' apps.json)"
+          if [ -z "${obj}" ]; then
+            echo "No app in apps.json has appcode '${APP_CODE}'." >&2
+            exit 1
+          fi
+          echo "type=$(echo "${obj}" | jq -r '.type // ""')" >> "$GITHUB_OUTPUT"
+      - name: Setup Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.fastembed_cache
+          key: fastembed-bge-m3-v1
+      - name: Feed examples into the corpus
+        env:
+          CORPUS_ACTION: feed
+          APP_TYPE: ${{ steps.app.outputs.type }}
+          PAYLOAD: ${{ inputs.payload }}
+          FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.fastembed_cache
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: python scripts/corpus_action.py
+      - if: always()
+        uses: Lascade-Co/actions/actions/seal-upload@seal-v1
+
+  clear:
+    name: Clear corpus
+    if: ${{ inputs.action == 'clear' }}
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    concurrency:
+      group: corpus-consolidate
+      cancel-in-progress: false
+    steps:
+      - name: Seal job output
+        uses: Lascade-Co/actions/actions/seal@seal-v1
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Setup Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Clear the corpus table
+        env:
+          CORPUS_ACTION: clear
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: python scripts/corpus_action.py
       - if: always()
         uses: Lascade-Co/actions/actions/seal-upload@seal-v1

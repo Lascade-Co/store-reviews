@@ -179,22 +179,22 @@ def upsert(row: dict) -> None:
     )
 
 
-def delete(key: str) -> None:
-    table = _get_table()
-    if table is None:
-        return
-    table.delete(f"key = '{_escape(key)}'")
+def clear() -> None:
+    """Drop the whole corpus table (removes every row).
 
-
-def export() -> list[dict]:
-    """All rows, vector column dropped, for human inspection."""
-    table = _get_table()
-    if table is None:
-        return []
-    rows = table.to_arrow().to_pylist()
-    for row in rows:
-        row.pop("vector", None)
-    return rows
+    Used by the dashboard "clear" action to reset the corpus. The next ``upsert``
+    recreates the table from the row's vector dimension, so a cleared corpus
+    simply behaves like a cold start ("no examples") until fed again. No-op when
+    the table does not exist yet.
+    """
+    global _table
+    db = _connect()
+    if TABLE_NAME in set(db.table_names()):
+        db.drop_table(TABLE_NAME)
+        LOG.info("Cleared corpus: dropped table %s", TABLE_NAME)
+    else:
+        LOG.info("Clear corpus: table %s does not exist yet — nothing to drop", TABLE_NAME)
+    _table = None
 
 
 # --------------------------------------------------------------------------- #

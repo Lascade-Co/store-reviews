@@ -15,6 +15,27 @@ from common import corpus, embeddings
 LOG = logging.getLogger(__name__)
 
 
+def build_row(obj: dict, vector: list[float]) -> dict:
+    """Build a corpus table row from a pending/feed dict and its embedding.
+
+    Shared by consolidation (pending files) and corpus_action.feed (dashboard
+    seeds) so both produce exactly the same schema, including the ``model`` tag.
+    """
+    return {
+        "key": obj["key"],
+        "vector": vector,
+        "review": (obj.get("review") or "").strip(),
+        "reply": (obj.get("reply") or "").strip(),
+        "app": obj.get("app") or "",
+        "type": obj.get("type") or "",
+        "store": obj.get("store") or "",
+        "rating": int(obj.get("rating") or 0),
+        "lang": obj.get("lang") or "",
+        "created_at": obj.get("created_at") or "",
+        "model": embeddings.MODEL_NAME,
+    }
+
+
 def consolidate(pending, *, embed_fn, upsert_fn, delete_pending_fn) -> tuple[int, int]:
     """Embed → upsert → delete each pending entry. Returns (upserted, left)."""
     upserted = 0
@@ -30,20 +51,7 @@ def consolidate(pending, *, embed_fn, upsert_fn, delete_pending_fn) -> tuple[int
                 delete_pending_fn(object_key)
                 continue
             vector = embed_fn([review])[0]
-            row = {
-                "key": key,
-                "vector": vector,
-                "review": review,
-                "reply": (obj.get("reply") or "").strip(),
-                "app": obj.get("app") or "",
-                "type": obj.get("type") or "",
-                "store": obj.get("store") or "",
-                "rating": int(obj.get("rating") or 0),
-                "lang": obj.get("lang") or "",
-                "created_at": obj.get("created_at") or "",
-                "model": embeddings.MODEL_NAME,
-            }
-            upsert_fn(row)
+            upsert_fn(build_row(obj, vector))
             delete_pending_fn(object_key)
             upserted += 1
         except Exception:

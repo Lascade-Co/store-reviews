@@ -333,6 +333,11 @@ def _suggest_batch(new_reviews: list[dict]) -> dict[str, str]:
                 "examples": examples,
             }
         )
+    LOG.info(
+        "Google Play RAG gate: %d of %d new review(s) cleared the gate and will be sent to Codex",
+        len(items),
+        len(new_reviews),
+    )
     if not items:
         return {}
     return generate_suggested_replies(items)

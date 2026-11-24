@@ -20,6 +20,30 @@ class RatingBandTests(unittest.TestCase):
         self.assertEqual(corpus.rating_band("x"), "neg")
 
 
+class ClearTests(unittest.TestCase):
+    def setUp(self):
+        # clear() caches the table at module level; reset it around each test.
+        self._saved_table = corpus._table
+        corpus._table = Mock()
+        self.addCleanup(lambda: setattr(corpus, "_table", self._saved_table))
+
+    def test_drops_table_when_present_and_resets_cache(self):
+        db = Mock()
+        db.table_names.return_value = [corpus.TABLE_NAME, "other"]
+        with patch("common.corpus._connect", return_value=db):
+            corpus.clear()
+        db.drop_table.assert_called_once_with(corpus.TABLE_NAME)
+        self.assertIsNone(corpus._table)  # cache cleared so next op reopens
+
+    def test_no_op_when_table_absent(self):
+        db = Mock()
+        db.table_names.return_value = ["other"]
+        with patch("common.corpus._connect", return_value=db):
+            corpus.clear()
+        db.drop_table.assert_not_called()
+        self.assertIsNone(corpus._table)
+
+
 class PendingFileTests(unittest.TestCase):
     def setUp(self):
         self.env = patch.dict(os.environ, {"R2_BUCKET": "b"}, clear=False)
