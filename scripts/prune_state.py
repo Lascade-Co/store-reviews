@@ -1,4 +1,4 @@
-"""Prune inactive reviews from a state file to keep the active set bounded.
+"""Prune inactive reviews from state to keep the active set bounded.
 
 The `reviews` map holds only reviews still worth showing on the dashboard. This
 drops the rest while keeping their ids in `posted_ids` (the permanent dedup
@@ -8,18 +8,11 @@ Rules (a review is kept only if it is still "active"):
   - replied:   keep for REPLY_EDIT_WINDOW_DAYS after the reply, then drop
   - un-replied: keep for OPEN_POLL_WINDOW_DAYS after it was posted, then drop
 
-Run in the commit job AFTER the remote merge (running it before the merge would
-be undone by the union). No-op if the file does not exist.
-
-Usage: prune_state.py STATE_FILE
+``prune_inactive`` is called by ``state_manager.prune_and_save`` just before the
+R2 write — AFTER any merge, so the union can't resurrect a pruned entry.
 """
 
-import json
-import os
-import sys
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 
 
 OPEN_POLL_WINDOW_DAYS = 7
@@ -63,41 +56,3 @@ def prune_inactive(state: dict, now: datetime) -> dict:
     missing = [rid for rid in all_review_ids if rid not in seen]
     state["posted_ids"] = missing + list(existing)
     return state
-
-
-def main() -> None:
-    if len(sys.argv) != 2:
-        raise SystemExit("Usage: prune_state.py STATE_FILE")
-
-    path = Path(sys.argv[1])
-    if not path.exists():
-        return  # nothing to prune (e.g. a provider not configured for this app)
-
-    state = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(state, dict):
-        raise SystemExit(f"State file must contain a JSON object: {path}")
-
-    before = len(state.get("reviews", {}) or {})
-    prune_inactive(state, datetime.now(timezone.utc))
-    after = len(state["reviews"])
-
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(state, handle, indent=4)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, path)
-    except Exception:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
-
-    print(f"prune_state: {path} reviews {before} -> {after} (posted_ids {len(state['posted_ids'])})")
-
-
-if __name__ == "__main__":
-    main()

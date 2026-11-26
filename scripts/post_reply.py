@@ -17,7 +17,7 @@ import os
 from common import corpus
 from common.publish import build_list, download_current, upload
 from common.review_sync import reply_hash
-from common.state_manager import load_state, now_iso, save_state
+from common.state_manager import load_state, now_iso, prune_and_save, save_state
 
 
 LOG = logging.getLogger(__name__)
@@ -227,8 +227,13 @@ def main() -> int:
     payload = build_list(previous, states, [], app_details)
     upload(payload, app_code)
 
-    # Success (so the commit step runs and persists state) when at least one
-    # reply landed or was already sent; failure only when nothing succeeded.
+    # Persist each provider's state to R2 (prune + conditional write). Replaces
+    # the old git commit step; a concurrent sync is reconciled by the merge.
+    for provider, state in states.items():
+        prune_and_save(provider, state)
+
+    # Success when at least one reply landed or was already sent; failure only
+    # when nothing succeeded.
     return 0 if (sent + skipped) > 0 else 1
 
 

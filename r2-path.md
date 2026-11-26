@@ -7,14 +7,19 @@ holds hashes and ids only.
 ## Layout
 
 ```
-s3://<R2_BUCKET>/
+s3://<R2_BUCKET>/ r2 bucket = repo name
 │
 ├── <R2_DATA_PREFIX>/                      ← dashboard review files (one per app)
 │   ├── D1AS_D1IS.json                        Airlines70   — the pending-review list
 │   ├── M4AS_M4IS.json                        Flight Deals    the dashboard reads &
 │   ├── D1AF.json                             Flights70       the reply workflow updates
 │   ├── D1AH.json                             Hotels70
-│   └── D1AC.json                             Rent80
+│   ├── D1AC.json                             Rent80
+│   └── state/                             ← review state (private bookkeeping)
+│       ├── D1AS_D1IS/appstore.json           posted_ids, reviews map, baseline,
+│       ├── D1AS_D1IS/playstore.json          reply flags/hashes — one object per
+│       └── <appcode>/<provider>.json         app+provider, written with ETag
+│                                             conditional puts (optimistic lock)
 │
 └── <R2_CORPUS_PREFIX>/   (default: "corpus")  ← the RAG corpus
     │
@@ -36,6 +41,7 @@ s3://<R2_BUCKET>/
 | What | R2 path | Written by | Read by |
 |---|---|---|---|
 | **Dashboard review file** (per app) | `<R2_DATA_PREFIX>/<appcode>.json` | `publish.py` (sync run) + `post_reply.py` (on reply) | the dashboard; reply workflow |
+| **Review state** (per app+provider) | `<R2_DATA_PREFIX>/state/<appcode>/<provider>.json` | `state_manager.save_state` / `prune_and_save` (ETag conditional put + merge-on-conflict) | `state_manager.load_state` (sync + reply) |
 | **Corpus pending** (per human reply) | `<R2_CORPUS_PREFIX>/pending/<appcode>__<store>__<reviewId>.json` | `post_reply._capture_corpus` → `corpus.write_pending` | `consolidate_corpus.py`, then **deleted** on success |
 | **Common vector DB** (LanceDB) | `<R2_CORPUS_PREFIX>/lancedb/` → table `replies.lance/` | `consolidate_corpus.py` → `corpus.upsert` | `rag.retrieve_examples` → `corpus.search` |
 
@@ -67,7 +73,7 @@ The pending `<key>` is `{appcode}__{store}__{reviewId}` (store = `playstore` or
 
 ## Not on R2
 
-- **State files** (`posted_ids`, review map, baseline, reply hashes) →
-  local filesystem → git, at `state/<appcode>/<provider>.json`. No review text,
-  hashes/ids only — safe in git.
+- **State** used to live in git; it now lives on R2 (above). No git push, no CI
+  App token, no `REPO_AGE_KEY` for state. Concurrent sync/reply writers are
+  reconciled by ETag conditional puts + `merge_state`.
 - **`apps.json`** → in the repo, not R2.
