@@ -69,17 +69,17 @@ on:
 # Single mode uses a per-REVIEW group so replies to different reviews run in
 # parallel and never cancel each other (GitHub keeps only one pending run per
 # group). Batch mode has no single review_id, so it falls back to a per-app
-# "all" group. State stays safe either way: the commit step reconciles
-# concurrent pushes via a JSON merge + retry, and post_reply.py guards each
-# reply by hash. review_id is empty in batch mode -> group ...-all.
+# "all" group. State stays safe either way: state_manager writes each app's R2
+# object with an ETag conditional put and merges on conflict, and post_reply.py
+# guards each reply by hash. review_id is empty in batch mode -> group ...-all.
 #
 # Known, benign race: a batch (group ...-all) and a single reply to the SAME
 # review (group ...-<id>) are in different groups, so they can run at once and
 # both send that review's reply. This is harmless — the store reply is
 # create-or-replace on both App Store and Google Play (idempotent; the store
-# ends with one reply), and merge_state reconciles the two commits. A shared
-# per-app group would prevent it but would re-introduce the far worse
-# cancel-drop of rapid single replies, so we accept the redundant call.
+# ends with one reply), and the R2 conditional-put merge reconciles the two
+# state writes. A shared per-app group would prevent it but would re-introduce
+# the far worse cancel-drop of rapid single replies, so we accept it.
 concurrency:
   group: reply-${{ inputs.app_code }}-${{ inputs.review_id || 'all' }}
   cancel-in-progress: false
@@ -102,21 +102,10 @@ jobs:
     steps:
       - name: Seal job output
         uses: Lascade-Co/actions/actions/seal@seal-v1
-      # Reviewed main blocks direct pushes except from the CI App (a ruleset bypass actor),
-      # so the state commit pushes with an App token, not GITHUB_TOKEN.
-      - name: Create CI App token
-        id: app-token
-        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
-        with:
-          client-id: ${{ secrets.CI_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
-          owner: Lascade-Co
-          repositories: store-reviews
+      # State lives on R2 now (no git push), so a plain read-only checkout is
+      # enough — it only needs apps.json and the scripts.
       - name: Checkout Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
       - name: Resolve app from apps.json
         # The dashboard only knows the appcode; look up the matching Infisical
         # slug (to fetch secrets) and display name from apps.json.
@@ -170,51 +159,6 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_DATA_PREFIX: ${{ secrets.R2_DATA_PREFIX }}
         run: python scripts/post_reply.py
-      - name: Commit Updated State
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          APP_DIR="state/${APP_CODE}"
-          git add "${APP_DIR}" 2>/dev/null || true
-          if git diff --cached --quiet; then
-            echo "No state changes."
-            exit 0
-          fi
-
-          merge_remote_state() {
-            provider="$1"
-            local_file="${APP_DIR}/${provider}.json"
-            remote_file="/tmp/remote_${APP_CODE}_${provider}.json"
-            [ -f "${local_file}" ] || return 0
-            if git show "origin/${GITHUB_REF_NAME}:${local_file}" > "${remote_file}" 2>/dev/null; then
-              python scripts/merge_state.py "${remote_file}" "${local_file}"
-            fi
-          }
-
-          for attempt in 1 2 3 4; do
-            git fetch origin "${GITHUB_REF_NAME}"
-            merge_remote_state appstore
-            merge_remote_state playstore
-            python scripts/prune_state.py "${APP_DIR}/appstore.json"
-            python scripts/prune_state.py "${APP_DIR}/playstore.json"
-            git reset --mixed "origin/${GITHUB_REF_NAME}"
-            git add "${APP_DIR}" 2>/dev/null || true
-            if git diff --cached --quiet; then
-              echo "Remote already contains the state changes."
-              exit 0
-            fi
-            git commit -m "Record dashboard reply (${APP_CODE})"
-            if git push; then
-              echo "State pushed on attempt ${attempt}/4."
-              exit 0
-            fi
-            echo "Git push rejected; retry ${attempt}/4."
-          done
-
-          echo "Unable to push state after 4 attempts."
-          exit 1
       - if: always()
         uses: Lascade-Co/actions/actions/seal-upload@seal-v1
 

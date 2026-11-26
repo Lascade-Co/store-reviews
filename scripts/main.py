@@ -9,6 +9,7 @@ import logging
 import os
 
 from common.publish import publish
+from common.state_manager import prune_and_save
 from providers.appstore import run_appstore_collect
 from providers.playstore import run_playstore_collect
 
@@ -38,6 +39,11 @@ def main():
         {"appstore": appstore_state, "playstore": playstore_state},
         appstore_entries + playstore_entries,
     )
+
+    # Final reconciled write: prune inactive reviews and persist each provider's
+    # state to R2 (replaces the old git commit-state job).
+    prune_and_save("appstore", appstore_state)
+    prune_and_save("playstore", playstore_state)
 
 
 if __name__ == "__main__":

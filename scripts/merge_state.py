@@ -1,10 +1,9 @@
-"""Merge two provider state snapshots without losing either workflow's progress."""
+"""Merge two provider state snapshots without losing either workflow's progress.
 
-import json
-import os
-import sys
-import tempfile
-from pathlib import Path
+``merge_states`` is called by ``state_manager`` to reconcile a concurrent write
+when an R2 conditional put is rejected (the sync and reply runs can both update
+the same app's state object).
+"""
 
 
 def _timestamp(value: object) -> str:
@@ -61,33 +60,3 @@ def merge_states(remote: dict, local: dict) -> dict:
         merged["last_review_id"] = remote.get("last_review_id", local.get("last_review_id"))
         merged["last_checked"] = remote.get("last_checked", local.get("last_checked"))
     return merged
-
-
-def main() -> None:
-    if len(sys.argv) != 3:
-        raise SystemExit("Usage: merge_state.py REMOTE_STATE LOCAL_STATE")
-
-    remote_path = Path(sys.argv[1])
-    local_path = Path(sys.argv[2])
-    remote = json.loads(remote_path.read_text(encoding="utf-8"))
-    local = json.loads(local_path.read_text(encoding="utf-8"))
-    merged = merge_states(remote, local)
-
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{local_path.name}.", suffix=".tmp", dir=local_path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(merged, handle, indent=4)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_name, local_path)
-    except Exception:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-if __name__ == "__main__":
-    main()
