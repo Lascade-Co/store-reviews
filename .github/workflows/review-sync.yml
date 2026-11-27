@@ -191,7 +191,7 @@ jobs:
     # corpus (retrieval), while replies drop append-only pending files on R2.
     # This job embeds those pending files and upserts them into the table, so a
     # single writer touches the shared table and there is no concurrent-write
-    # race (see automation.md). The concurrency group serializes two overlapping
+    # race (see review.md). The concurrency group serializes two overlapping
     # sync runs' consolidations. It writes nothing to git — only R2.
     name: Consolidate RAG corpus
     needs: [set-matrix, sync]

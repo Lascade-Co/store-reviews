@@ -10,7 +10,7 @@ Two layers, both on the private R2 bucket:
 Concurrency: the table is the only shared mutable object, and ONLY the
 consolidation job writes it (matrix sync jobs just read). Each pending file has a
 unique name (``{appcode}__{store}__{reviewId}``), so parallel reply runs never
-collide. That is the whole write-safety design — see automation.md.
+collide. That is the whole write-safety design — see review.md.
 
 LanceDB / pyarrow are imported lazily inside the table helpers so modules that
 only touch pending files (post_reply.py) don't need those libraries installed.
